@@ -92,7 +92,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}
+          # 非 Linux 腿的矩阵项没有 manylinux 字段（null）→ 回退成 'auto'，
+          # 免得把空值传进 action 的输入。
+          manylinux: ${{ matrix.manylinux || 'auto' }}
           args: --release --locked --out dist
           # manylinux 镜像应该自带 cmake（pypa/manylinux 的 issue 就在用容器内的 cmake），
           # 但本机拉不到镜像、没能在真容器里验证 → 缺失就兜底安装；
