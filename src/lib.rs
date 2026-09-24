@@ -4,6 +4,7 @@
 //! 面向使用者的友好 API 与 drop-in 门面在 `python/gmssl_fast/` 下用 Python 实现。
 
 mod errors;
+pub mod sm2_fmt;
 mod sm3;
 mod sm4;
 
