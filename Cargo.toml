@@ -1,0 +1,16 @@
+[package]
+name = "gmssl-fast"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+publish = false
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+gmssl-rs = "0.1.1"
+# 注意：extension-module 只在打 wheel 时启用（见 pyproject.toml 的 [tool.maturin]），
+# 否则 `cargo test` 会因缺 libpython 符号而链接失败。
+pyo3 = { version = "0.29", features = ["abi3-py38"] }

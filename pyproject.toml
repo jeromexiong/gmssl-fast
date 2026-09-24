@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.15,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "gmssl-fast"
+version = "0.1.0"
+description = "基于 GmSSL 的国密算法（SM2/SM3/SM4）Python 扩展，静态链接、零系统依赖"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Topic :: Security :: Cryptography",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "gmssl_fast._core"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

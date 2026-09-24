@@ -1,0 +1,16 @@
+.venv/
+.venv-x86/
+target/
+dist/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# maturin develop 会把编出的扩展模块放进 python 源目录
+python/gmssl_fast/*.so
+python/gmssl_fast/*.pyd
+python/gmssl_fast/*.dylib
+
+# 本机 cargo 镜像配置（弱网环境用，不应进仓库）
+.cargo/
