@@ -271,7 +271,11 @@ b3996ca6e16bc109c3e43a1133a2c16485f4f67dd0d8dded6b837f4e9dca2ea21";
         let der = gmssl_rs::sm2::sm2_encrypt(&key, message).unwrap();
         let raw = sm2_fmt::ct_der_to_raw(&der).unwrap();
         assert_eq!(raw.len(), 96 + message.len());
-        assert_ne!(raw[0], 0x30);
+        // 「没被 DER 包装」用长度判：DER 至少多出 SEQUENCE/INTEGER/OCTET STRING 的头与长度
+        // （≥ 10 字节）——这是确定性判据。
+        assert!(der.len() > raw.len());
+        // ⚠️ **不要用首字节判**：裸格式 x 坐标首字节本身就是 0x30 的概率约 1/256，
+        //    CI 上真因此假失败过（固定向量的首字节断言另说，见 tests/golden.py）。
     }
 
     /// 打印 GmSSL 自身产出的 DER 模板（手工构造 DER 的校准依据）。

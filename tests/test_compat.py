@@ -21,7 +21,8 @@ def test_sm2_call_shape_matches_legacy() -> None:
     msg = GOLDEN_SM2_MSG.encode("utf-8")
 
     ciphertext = compat.Sm2Cipher.encrypt(GOLDEN_SM2_PUB, msg)
-    assert ciphertext[0] != 0x30  # 裸 C1C3C2
+    # 长度是确定性的「裸 C1C3C2」判据（别用首字节：x 首字节可能是 0x30，概率 1/256）
+    assert len(ciphertext) == 96 + len(msg)
 
     compat.configure(sm2_public_key=GOLDEN_SM2_PUB)
     assert compat.Sm2Cipher.decrypt(GOLDEN_SM2_PRIV, ciphertext) == msg

@@ -2,8 +2,11 @@
 
 ## 契约（冻结，见设计 §4.1 / §7）
 
-- 密文：**裸 C1C3C2** = ``x(32) ‖ y(32) ‖ C3(32) ‖ C2(n)``，长度 ``96 + n``，首字节 ≠ 0x30
-- 签名：**裸 r‖s** = 64 字节，首字节 ≠ 0x30
+- 密文：**裸 C1C3C2** = ``x(32) ‖ y(32) ‖ C3(32) ‖ C2(n)``，长度 ``96 + n``
+- 签名：**裸 r‖s** = 64 字节
+- 「没被 DER 包装」用**长度**判定（DER 至少多 10 字节）；
+  ⚠️ **不要对随机数据判首字节 ≠ 0x30**：裸格式 x 坐标首字节本身可能就是 0x30
+  （概率约 1/256），CI 上真因此假失败过；固定 Golden 向量判首字节则没问题
 - 公钥：接受 128（无 04 前缀）与 130（含 04 前缀）字符两种输入
 - 解密：不做「首字节是 0x04 就剥离」的启发式，而是**两候选逐个试解**
 
@@ -35,8 +38,8 @@ def test_encrypt_produces_raw_c1c3c2() -> None:
     sm2 = gmssl_fast.SM2(public_key=GOLDEN_SM2_PUB)
     msg = GOLDEN_SM2_MSG.encode("utf-8")
     ct = sm2.encrypt(msg)
+    # 长度是确定性的「未包装」判据（DER 会多出 10 字节以上）
     assert len(ct) == 96 + len(msg)
-    assert ct[0] != 0x30
 
 
 def test_decrypts_golden_ciphertext() -> None:
@@ -70,8 +73,8 @@ def test_sign_produces_raw_rs_and_verifies() -> None:
     sm2 = gmssl_fast.SM2(private_key=GOLDEN_SM2_PRIV, public_key=GOLDEN_SM2_PUB)
     msg = GOLDEN_SM2_MSG.encode("utf-8")
     sig = sm2.sign(msg)
+    # DER 签名为 70～72 字节，长度即可确定性地区分裸 r‖s
     assert len(sig) == 64
-    assert sig[0] != 0x30
     assert sm2.verify(msg, sig) is True
     assert sm2.verify(b"other", sig) is False
     tampered = bytearray(sig)
