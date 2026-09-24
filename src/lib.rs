@@ -5,6 +5,7 @@
 
 mod errors;
 mod sm3;
+mod sm4;
 
 use pyo3::prelude::*;
 
@@ -13,6 +14,14 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sm3::sm3, m)?)?;
     m.add_function(wrap_pyfunction!(sm3::sm3_hmac, m)?)?;
     m.add_function(wrap_pyfunction!(sm3::sm3_pbkdf2, m)?)?;
+
+    m.add_function(wrap_pyfunction!(sm4::sm4_cbc_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(sm4::sm4_cbc_decrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(sm4::sm4_ecb_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(sm4::sm4_ecb_decrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(sm4::sm4_ctr_xor, m)?)?;
+    m.add_function(wrap_pyfunction!(sm4::sm4_gcm_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(sm4::sm4_gcm_decrypt, m)?)?;
 
     let py = m.py();
     m.add("GmsslError", py.get_type::<errors::GmsslError>())?;
