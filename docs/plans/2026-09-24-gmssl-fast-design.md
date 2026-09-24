@@ -16,6 +16,8 @@
 | wheel | **abi3-py38**，4 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64` / `win_amd64` |
 | 工具链 | pyo3 0.29.x（MSRV Rust 1.83）、maturin 1.15.x、CMake（构建前置） |
 | 包名 | `gmssl-fast`（PyPI 未占用，HTTP 404，发布前占名）；模块 `gmssl_fast` |
+| SM2 线格式 | **默认裸格式**（密文裸 C1C3C2、签名裸 r‖s），`fmt="raw"\|"der"` 可选——为兼容 sm-crypto / gm_crypto 与存量数据，见 §4.1 |
+| 对接目标 | 可直接接入 fastapiadmin 的国密契约；其 `tests/core/test_sm_crypto.py` 的 golden 向量作为验收标准，见 §7 |
 
 ## 1. 依赖链与版本锚点（已实测核实）
 
@@ -89,12 +91,13 @@ ct, tag = gcm.encrypt(plaintext, aad=b"")   # tag 固定 16 字节，不暴露�
 pt = gcm.decrypt(ct, tag, aad=b"")          # 失败抛 GmsslAuthError
 
 # SM2 —— 密钥对象风格
-sk = gm.SM2PrivateKey.from_pem(pem)   # 或 .generate()
-pk = sk.public_key()
-sig = sk.sign(msg)                    # 内部做 ZA 杂凑，默认 ID "1234567812345678"，可传 id=
-ok  = pk.verify(msg, sig)             # -> bool
-ct  = pk.encrypt(b"...")              # 明文 ≤ 255 字节；DER 密文
-pt  = sk.decrypt(ct)
+sk = gm.SM2PrivateKey.from_hex(d)      # 或 .generate() / .from_pem(pem)
+pk = sk.public_key()                   # from_hex 兼容 128 / 130 字符公钥
+sig = sk.sign(msg)                     # fmt="raw"（默认）→ 裸 r‖s
+sig_der = sk.sign(msg, fmt="der")      # DER SEQUENCE{INTEGER r, INTEGER s}
+ok  = pk.verify(msg, sig)              # fmt 默认与签名一致；可传 id= 覆盖签名者标识
+ct  = pk.encrypt(b"...")               # fmt="raw"（默认）→ 裸 C1C3C2 = x(32)‖y(32)‖C3(32)‖C2(n)
+pt  = sk.decrypt(ct)                   # 自动试解「原样」与「剥掉 04 前缀」两个候选
 ```
 
 约定：
@@ -106,6 +109,40 @@ pt  = sk.decrypt(ct)
 - **bytes 进 bytes 出**；hex 只出现在显式命名（`_hex` 后缀 / `from_pem`）。
 - **不暴露的参数**：GCM 的 tag 长度（固定 16）、GCM 的 IV 长度（固定 12）。
 - 不做文件 / 磁盘 PEM IO（YAGNI；上游有 `*_file` 方法但我们不包）。
+
+### 4.1 SM2 线格式（接入 fastapiadmin 的硬门槛）
+
+对接目标 fastapiadmin（`backend/app/utils/sm_crypto.py`，2026-09 由 `gmssl` 迁到 `snowland-smx`）
+的对外契约**冻结在 39 条测试**里，其 SM2 是**裸格式**，而 GmSSL / `gmssl-rs` 输出的是 **DER**：
+
+| 项 | fastapiadmin 契约（冻结） | `gmssl-rs` 原生 | 是否需要转换 |
+|---|---|---|---|
+| SM2 密文 | 裸 C1C3C2 = `x(32)‖y(32)‖C3(32)‖C2(n)`，长度 `96+n`，首字节 ≠ `0x30` | **DER** SEQUENCE（实测 255B 明文 → 364B） | **必须** |
+| SM2 签名 | 裸 r‖s = 64 字节 / 128 hex，首字符 ≠ `'30'` | **DER** SEQUENCE{INTEGER r, INTEGER s}（实测 71~72B） | **必须** |
+| SM2 公钥 | 130 字符 `04‖X‖Y`，内部归一化为 128 | 未压缩 `04‖X‖Y` | 兼容两种长度即可 |
+| SM4 | CBC + PKCS7，输出 `iv(16)‖ciphertext` | `Sm4Cbc::encrypt(key, iv, pt)` 自带 PKCS7 | 拼装属消费方，无需转换 |
+| SM3 / 密码哈希 | 64 hex；`salt$hash`（salt 32 hex + hash 64 hex） | `Sm3::digest` | 无需转换 |
+
+**实现：纯安全 Rust 手写 DER ↔ 裸格式编解码**（`src/sm2_fmt.rs`），结构已由 GmSSL 源码确认
+（`sm2_lib.c:161` 签名 / `:695` 密文，用 `asn1_integer_to_der` + `asn1_octet_string_to_der`
++ `asn1_sequence_header_to_der`）：
+
+- 解析必须处理 **INTEGER 前导 `0x00`**（x/y/r/s 高位为 1 时）与**长形式长度**（C2 最长 255 字节 → `0x81`/`0x82`）
+- 反向组装时，对高位为 1 的值补 `0x00`
+- **不新增 unsafe、不调用未暴露的 C 符号**：`gmssl-rs-sys` 里没有 `sm2_do_encrypt` /
+  `sm2_ciphertext_to_der` / `sm2_signature_to_der`（GmSSL C 层有，但 Rust 绑层没暴露）
+
+**解密兼容性（照搬项目做法，别自己发明）**：**不做**「首字节是 `0x04` 就剥离」的启发式——
+裸格式 x 坐标的首字节本身就可能等于 `0x04`（约 1/256 ≈ 0.39% 的密文会被吃错）。改为
+**候选逐个试解**：先按原样解，失败再剥掉首字节重试；C3 是完整性摘要，错误解释只会失败、
+不会解出错误明文。项目里 `GOLDEN_SM2_CT_LEADING_04` 就是为锁定这条回归准备的。
+
+**签名摘要天然对齐**：项目自行拼装 `ZA = SM3(ENTL‖ID‖a‖b‖xG‖yG‖xA‖yA)`（ID 默认
+`1234567812345678`）再算 `E = SM3(ZA‖M)`；而 GmSSL 的 `sm2_sign_init` 内部做的就是这套，
+默认 ID 相同（已实测「默认 ID 签名可被显式同 ID 验签 = true」）→ **不需要自算摘要**。
+
+**接入代价**：项目侧只改 `sm_crypto.py` 的实现体（import + 薄适配，约 10 行），
+`sm_crypto_util.py` 与所有调用方（登录流程、`Sm4CbcTypeHandler`、`PwdUtil`）**零改动**。
 
 ## 5. 构建与 wheel 策略
 
@@ -142,6 +179,15 @@ pt  = sk.decrypt(ct)
   已实测可用的锚点：
   - SM3("abc") = `66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0`
   - SM4 分组：k = pt = `0123456789abcdeffedcba9876543210` → `681edf34d206965e86b3e94f536e4246`
+- **对接验收（最高优先级）**：移植 fastapiadmin `tests/core/test_sm_crypto.py` 的 golden 向量做
+  **双向交叉对拍**，且必须逐位一致：
+  - `GOLDEN_SM2_CT`（明文 `fastapiadmin-国密契约`，密文长度 = `96 + 25`）→ 本库能解出原文
+  - `GOLDEN_SM2_CT_LEADING_04`（首字节为 `0x04` 的**合法裸**密文）→ 必须能解出原文
+    （锁定「不做首字节启发式」这条）
+  - `GOLDEN_SM2_SIG`（128 hex 裸 r‖s）→ 本库验签通过
+  - 反向：**本库产出的密文/签名 → 项目侧 `Sm2Cipher` 必须能解开/验过**
+  - `GOLDEN_PWD`（`salt$hash`）、`GOLDEN_SM4_BLOCK_CIPHER`（全零 IV 下 CBC 首块 =
+    `99ce75c0ca2949d3eb87bd2d831f3510`）、`SM3_ABC_VECTOR`
 - **参数校验测试（安全门）**：GCM tag ≠ 16 必须抛错；GCM nonce ≠ 12 必须抛错；
   CBC 输入非块倍数必须抛错；SM2 明文 > 255 必须抛错；篡改 tag / 错误 aad /
   错误消息 / 错误 ID 必须拒绝。
@@ -214,6 +260,9 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
 
 ## 10. 未决 / 风险
 
+- **接入 fastapiadmin 的可行性已核实**（格式差异与对策见 §4.1）。待定：集成层
+  （`CommonCryptogramUtil` / `PwdUtil` / `Sm4CbcTypeHandler`）**是否进库** ——
+  建议不进：它们是消费方胶水，进库会把 SQLAlchemy / pydantic 拖成库依赖。
 - **arm64 原生性能未测**：本机无法测（工具链是 Rosetta x86_64、无 rustup）。
   若要在 README 里写 arm64 数字，需在 CI（macos-14 runner）或原生 arm64 机器上补测。
 - **上游单点维护**：见 §9 R3 预案。
