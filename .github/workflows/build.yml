@@ -88,10 +88,12 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           # 仅 Windows 需要：cmake-rs 会自己 -DCMAKE_C_FLAGS=…，把 CMake 平台默认的
-          # /DWIN32 /D_WINDOWS 顶掉，而 GmSSL 的 api.h / dylib.h 用 #ifdef WIN32
-          # ↳ 走 POSIX 分支 → MSVC 报 C1083 缺 dlfcn.h。这里把它补回来。
-          # 写法是 KEY=value（cmake-rs 自己会加 -D），值的空格用 ';' 代替（CMake 列表分隔符）。
-          GMSSL_CMAKE_DEFINES: ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'CMAKE_C_FLAGS=/DWIN32;/D_WINDOWS' || '' }}
+          # /DWIN32 顶掉，而 GmSSL 的 api.h / socket.h / dylib.h 都用 #ifdef WIN32
+          # ↳ 走 POSIX 分支 → MSVC 报 C1083 缺 dlfcn.h / netdb.h。这里把它补回来。
+          # 写法 KEY=value（cmake-rs 自己会加 -D）；**值里不能有空格，也不能用 ';'
+          # 塞多个宏**——Windows 走 Visual Studio 生成器，分号进 .vcxproj 的
+          # AdditionalOptions 后会被 MSBuild 的分号语义弄坏（已实测：加了 /D_WINDOWS 无效）。
+          GMSSL_CMAKE_DEFINES: ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'CMAKE_C_FLAGS=/DWIN32' || '' }}
         with:
           target: ${{ matrix.target }}
           # 非 Linux 腿的矩阵项没有 manylinux 字段（null）→ 回退成 'auto'，
