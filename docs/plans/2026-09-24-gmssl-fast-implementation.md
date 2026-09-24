@@ -777,10 +777,46 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 
 ## 完成定义（阶段 1）
 
-- [ ] `pip install gmssl-fast` 后，`tests/` 全部通过（含 4 条 fastapiadmin golden 与双向对拍）
+- [x] `pip install gmssl-fast` 后，`tests/` 全部通过（含 4 条 fastapiadmin golden 与双向对拍）
+      —— 用**真 wheel** 验证：`maturin build --release --locked` → `pip install dist/*.whl` → `pytest` 58 passed
 - [ ] 4 个平台各产出 1 个 abi3 wheel，且在 CI 上跑过测试
-- [ ] 代码里不存在 `fmt=` 参数、不存在 `unsafe`、不存在暴露给调用方的 GCM tag 长度
-- [ ] README 的性能数字全部来自 `benches/` 实测，且标注测试机架构
-- [ ] `docs/plans/2026-09-24-gmssl-fast-design.md` §8 回填实测数字
+      —— **未完成**：流水线已就绪，但尚未 push 到 GitHub 触发；本机只能产出 x86_64 macOS 轮子
+- [x] 代码里不存在 `fmt=` 参数、不存在 `unsafe`、不存在暴露给调用方的 GCM tag 长度
+      —— grep 复核：`unsafe` 只出现在 `src/sm2_fmt.rs` 的注释里；`GCM_TAG_LEN` 是常量、不是入参
+- [x] README 的性能数字全部来自 `benches/` 实测，且标注测试机架构（Rosetta x86_64，arm64 标「待补测」）
+- [x] `docs/plans/2026-09-24-gmssl-fast-design.md` §8 回填实测数字（新增 8.1 库级实测）
 
 **下一步**：阶段 2（fastapiadmin 迁移）单独成计划，验收标准见设计 §11。
+
+---
+
+## 执行状态（2026-09-24）
+
+每个任务一次提交；收尾时门禁为 `cargo fmt --all --check` ✓、
+`cargo clippy --all-targets --locked -- -D warnings` ✓、`cargo test --locked` 16 passed ✓、
+`pytest -q` 58 passed ✓。
+
+| 任务 | 提交 | 备注 |
+|---|---|---|
+| 设计文档 v2 | `0c3b69c` | 另有 `1b2f749`（SM2 线格式）、`3d4a301`（傻瓜式接口 + §11 迁移） |
+| 实施计划 | `d476a02` | 本文档 |
+| 1 PyO3 + maturin 链路、SM3 原语 | `7176810` | 首次跑通 vendored GmSSL 3.1.1 的 CMake 编译 |
+| 2 SM3 HMAC / PBKDF2 / 密码哈希 | `77c6e68` | |
+| 3 SM4 四模式 + GCM 安全门 | `1645e6e` | tag 硬编码 16、nonce 强制 12 |
+| 4 SM2 裸格式编解码 | `30aa9a7` | 纯安全 Rust，14 个单测 |
+| 5 SM2 API + golden 对拍 | `1196b86` | 存量密文/签名可直接读 |
+| 6 compat 门面 | `4fea7c0` | 含 `sm2_public_key` 注入的取舍 |
+| 7 与存量实现双向对拍 | `628df2d` | 与 snowland-smx 逐字节一致 |
+| 8 CI + 4 平台发布流水 | `92a9650` | cmake 用幂等兜底 + 首跑日志自证 |
+| 9 README + 基准 | `acda5c4` | 顺手定位了 SM2 签名慢 45% 的根因 |
+
+### 与计划的偏差（均已记录理由）
+
+1. **`cargo test` 需要 pyo3-free 核心**：否则测试要链接 libpython（计划未预见，实测必须改）。
+2. **`extension-module` 只写在 `pyproject.toml`**：写进 `Cargo.toml` 会让 `cargo test` 链接失败。
+3. **CI 测试链路改为「构建 wheel → 装 wheel → pytest」**：CI 没有 venv，`maturin develop` 用不了；
+   顺带把打包本身也纳入验证。
+4. **manylinux 的 cmake 未能在真容器里实测**：本机无 docker、podman 拉不到 maturin 镜像 →
+   改为幂等安装兜底 + 无条件 `cmake --version`，让首跑把答案变成事实。
+5. **SM2 签名性能**：库级 1395 ops/s 低于 C 层基线 2538 ops/s，根因是每次调用重建 PKCS#8
+   （GmSSL 校验公钥字段 = 一次额外 EC 乘法）；已登记为后续可选优化（设计 §10）。
