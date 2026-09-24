@@ -13,7 +13,7 @@
 | 算法范围 | SM2 + SM3 + SM4（CBC / CTR / GCM / **ECB**）；不暴露 SM9 / ZUC / X.509 |
 | SM4-ECB | 上游无封装，用 `Sm4Key::encrypt_block` 自拼 + 自管 PKCS7（纯安全 Rust，无 unsafe） |
 | SM4-GCM | **只提供一次性 API**（上游未暴露流式），文档写明内存占用 |
-| wheel | **abi3-py38**，4 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64` / `win_amd64` |
+| wheel | **abi3-py38**，3 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64`（**Windows 暂不支持**，原因见 §10） |
 | 工具链 | pyo3 0.29.x（MSRV Rust 1.83）、maturin 1.15.x、CMake（构建前置） |
 | 包名 | `gmssl-fast`（PyPI 未占用，HTTP 404，发布前占名）；模块 `gmssl_fast` |
 | SM2 线格式 | **裸格式，且是唯一行为**（密文裸 C1C3C2、签名裸 r‖s），**不暴露任何格式参数**；DER 只是内部实现细节，见 §4.1 |
@@ -36,8 +36,13 @@ gmssl-fast（本项目，PyO3 扩展）
 - `gmssl-rs-sys` 只在源码缺失时才 `curl` 下载 tarball（走 git 依赖时 cargo 会先递归拉子模块，那条兜底路径不可达）。
 - 上游 `gmssl-rs 0.1.1` 自身带 **59 个 `#[test]`**。
 - ⚠️ docs.rs 走 `DOCS_RS` 早退分支、**不真正编译链接 C 库** → "docs.rs 有文档"不等于"能编过"，必须以 CI 实测为准。
-- ⚠️ **CMake 4.x 兼容**：GmSSL 的 CMakeLists 仍是老式 `cmake_minimum_required` 写法，CMake ≥ 4 会直接报错。构建时必须传
-  `GMSSL_CMAKE_DEFINES="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"`（`gmssl-rs-sys` 支持该环境变量透传，实测有效）。
+- ⚠️ **CMake 版本（已纠正）**：GmSSL **3.1.1** 写的是 `cmake_minimum_required(VERSION 3.6)`，
+  CMake 4.x 下同样合法 → **不需要任何策略下限**。此处旧文写「必须传
+  `GMSSL_CMAKE_DEFINES="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"`、实测有效」是两处错：
+  ① 把手工探针里 GmSSL **3.2.0** 的老式写法（低于 3.5）张冠李戴到了 3.1.1；
+  ② `GMSSL_CMAKE_DEFINES` 是按 `KEY=value` 交给 cmake-rs 的，而 cmake-rs 自己会再加 `-D`，
+  多写的 `-D` 只会得到 `-DCMAKE_POLICY_VERSION_MINIMUM` 这个**假变量**（本机 CMakeCache
+  第 18 行实锤）→ 它一直是个空操作，从未生效过。
 - ⚠️ `ENABLE_SM2_PRIVATE_KEY_EXPORT` 默认 OFF，不开就缺 `sm2_private_key_info_from_pem/to_pem`；上游 build.rs 已强制 ON，无需我们处理（但要记住这条依赖）。
 
 ## 2. 上游已知问题与我们的对策
@@ -188,25 +193,29 @@ gm.sm3_password_verify("admin123", stored)   # -> bool；格式不合法直接 F
   （abi3-py38 在 0.29.2 仍受支持，目标到 abi3-py315）→ **每平台 1 个 whl**。
 - `crate-type = ["cdylib"]`；Python 3.8+。
 - 构建前置：**Rust 1.83+ / C 编译器 / CMake**。wheel 使用者三者都不需要。
-- 环境变量链（写进 CI 与本地文档）：
+- 构建命令（**无需任何环境变量**）：
   ```bash
-  GMSSL_CMAKE_DEFINES="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" maturin build --release --locked
+  maturin build --release --locked
   ```
+  `GMSSL_CMAKE_DEFINES` 是上游留的透传通道，写法为 `KEY=value`（cmake-rs 自己加 `-D`），
+  当前用不到（见 §1、§10）。
 - macOS 出**两个独立 wheel**（arm64 / x86_64），不做 universal2：GmSSL 是 C 代码，
   universal2 要求 CMake 同时按两架构编译（`cmake` crate 不会自动传
   `CMAKE_OSX_ARCHITECTURES`），是已知坑，收益只是少一个包。
-- ⚠️ **CI 风险点（首个 PR 就要验证）**：maturin-action 的 manylinux 容器里是否有
-  `cmake`；若无，需要在 `before-script-linux` 里 `yum/dnf install -y cmake`。
+- ✅ **manylinux 容器里的 cmake（原「最大未知项」）已有结论**：CI 的 Linux 腿
+  （`manylinux: auto`）构建成功，且校验了产物带 `manylinux` 标签。流水线仍保留幂等写法
+  （`command -v cmake || python3 -m pip install cmake` + 无条件 `cmake --version`），防镜像变动。
 
 ## 6. CI/CD
 
 1. **PR 流水**（`ubuntu-latest`）：`maturin develop --locked` → `pytest` →
    `cargo clippy -- -D warnings` → `cargo fmt --check`。正确性门禁不依赖全平台矩阵。
-2. **Release 流水**（`v*` tag）：4 个 target 各出 1 个 wheel
+2. **Release 流水**（`v*` tag）：**3 个 target** 各出 1 个 wheel
    （`x86_64-unknown-linux-gnu` manylinux auto / `aarch64-apple-darwin` /
-   `x86_64-apple-darwin` / `x86_64-pc-windows-msvc`），每平台先跑测试再上传，
+   `x86_64-apple-darwin`；Windows 见 §10），每平台构建后上传 artifact，
    最后**单独一个 job** 用 `pypa/gh-action-pypi-publish` 发布
    （不要在矩阵里各自 publish，会重复/竞争）。
+   `workflow_dispatch` 也能跑整套矩阵（不发 PyPI）——不发版时验证平台构建用。
 3. 首次发布先走 TestPyPI 全流程；`PYPI_API_TOKEN` 进 GitHub Secrets。
 4. 维护者流程：`maturin develop` 调试 → 改版本号（Cargo.toml + pyproject.toml）→
    `git tag v0.1.0 && git push origin v0.1.0` → CI 出包。
@@ -314,7 +323,8 @@ C 层基线把密钥构造放在循环外。验签只解析 SPKI 公钥（点合
 3. 需要硬件加速（arm64 的 SM4 CE / SM2_ARM64 / GMUL_ARM64）→ 只能上 3.2.0
    并在 build.rs 里显式打开 `ENABLE_SM4_ARM64` / `ENABLE_SM2_ARM64` /
    `ENABLE_SM3_ARM64` / `ENABLE_GMUL_ARM64` 等开关；
-4. 需要 GmSSL 3.2.0 的新特性。
+4. 需要 GmSSL 3.2.0 的新特性；
+5. **需要 Windows 支持**（CI 实测 MSVC 构建不过，见 §10；需要给 GmSSL 补 `WIN32` 宏）。
 
 做法：把 `gmssl-rs` + `gmssl-rs-sys` 源码 vendor 进本仓库（Apache-2.0，合法），
 改 build.rs 的开关与源码版本。**注意**：R3 必须先验证"打开加速后 SM2 签名是否
@@ -325,14 +335,22 @@ C 层基线把密钥构造放在循环外。验签只解析 SPKI 公钥（点合
 - **集成层划分已定**（见 §4.2）：`CommonCryptogramUtil` / `Sm4CbcTypeHandler` 留消费方；
   `PwdUtil` 的功能（`salt$hash`）收进库（`sm3_password_hash/verify`）。
 - **arm64 原生性能未测**：本机无法测（工具链是 Rosetta x86_64、无 rustup）。
-  若要在 README 里写 arm64 数字，需在 CI（macos-14 runner）或原生 arm64 机器上补测。
+  arm64 **wheel** 已由 CI 产出且可用；但性能数字仍需在 arm64 上跑一次 `benches/bench.py`
+  才能写进 README（不能拿 Rosetta x86_64 的数字代替）。
 - **上游单点维护**：见 §9 R3 预案。
-- **manylinux 容器是否自带 cmake（原「最大未知项」）**：已改判为**可接受风险**。
-  本机无 docker、podman 可用但 maturin 镜像最终没拉下来，**未能在真容器里实测**；
-  间接证据（`pypa/manylinux` 的 issue 标题就写着「cmake ... in
-  manylinux_2014_x86_64 container」「chore: update cmake」）表明镜像内有 cmake。
-  流水线因此写成幂等 + 自证：`command -v cmake || python3 -m pip install cmake`，
-  并**无条件 `cmake --version`**——首跑日志会把版本变成确定事实。
+- **manylinux 容器是否自带 cmake（原「最大未知项」）→ 已有答案**：CI 的 Linux 腿
+  （`manylinux: auto`）**构建通过**，产物也校验了带 `manylinux` 标签。流水线仍保留幂等写法
+  （`command -v cmake || python3 -m pip install cmake` + 无条件 `cmake --version`）防镜像变动。
+- **Windows 不支持（新增，CI 实测 3 次）**：`x86_64-pc-windows-msvc` 已在矩阵中移除。
+  根因有两层：① GmSSL 3.1.1 的 `include/gmssl/api.h`、`socket.h`、`dylib.h` 用
+  `#ifdef WIN32`（而 MSVC 只预定义 `_WIN32`）；② 正常 MSVC+CMake 会由平台模块
+  `Windows-MSVC.cmake` 给出 `/DWIN32`，但 **cmake-rs 会自己设 `CMAKE_C_FLAGS` /
+  `CMAKE_C_FLAGS_RELEASE`，把它顶掉** → 代码走 POSIX 分支 → `C1083: 缺少 dlfcn.h / netdb.h`。
+  试过 `CMAKE_C_FLAGS=/DWIN32` 与（VS 生成器才认的）
+  `CMAKE_C_FLAGS_RELEASE=/DWIN32;/MD;/O2;/Ob2;/DNDEBUG`，宏均未到达 cl.exe。
+  → **要拿下 Windows 必须走 R3**（vendor + 自控构建，顺带给 GmSSL 补
+  `#if defined(_WIN32) && !defined(WIN32)` → `#define WIN32`）。用户实际部署目标是 Linux 服务，
+  当前不阻塞。
 - **SM2 签名的密钥缓存优化（新增，有实测依据）**：库级 1395 ops/s 比 C 层基线低 45%，
   全花在每次调用重新解析 PKCS#8（含一次 EC 乘法校验公钥）。若后续确实成为瓶颈，
   可暴露一个持有 `Sm2Key` 的句柄对象（类似 `SM4` 实例）把密钥缓存到 C 层；

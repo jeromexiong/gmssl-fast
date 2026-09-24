@@ -14,8 +14,16 @@
 ## 安装
 
 ```bash
-pip install gmssl-fast          # 4 平台 abi3 wheel，Python ≥ 3.8
+pip install gmssl-fast          # abi3 wheel，Python ≥ 3.8
 ```
+
+已实测产出 wheel 的平台（CI）：**Linux x86_64（manylinux）/ macOS arm64 / macOS x86_64**。
+
+⚠️ **Windows 暂不支持**：上游 `gmssl-rs-sys` 在 MSVC 下构建不过。GmSSL 的 `api.h` /
+`socket.h` / `dylib.h` 用 `#ifdef WIN32`，而构建链上的 `cmake-rs` 会自己设
+`CMAKE_C_FLAGS(_RELEASE)`、把 CMake 平台默认的 `/DWIN32` 顶掉 → 代码走 POSIX 分支，
+MSVC 报 `C1083: 缺 dlfcn.h / netdb.h`。拿下 Windows 需走设计文档 §9 的 R3（vendor 上游
+crate + 自控构建配方，顺手补一句 `#if defined(_WIN32) && !defined(WIN32)`）。
 
 ## 快速开始
 
@@ -79,11 +87,10 @@ Sm4Cipher = compat.Sm4Cipher
 3. **校验失败会往 stderr 打 `文件:行号:函数():` 前缀的调试输出**：GmSSL 的 `DEBUG` 宏被
    硬编码为 1，库里无法关闭（上游行为）。程序输出不受影响，但如果要捕获 stderr 需注意。
 4. **SM4-GCM 只有一次性 API**：加密 N 字节需要约 N 字节额外内存，大文件请分块并自行拼接。
-5. **从源码构建需要 CMake**（wheel 不需要）：GmSSL 由 CMake 构建。若本机 CMake ≥ 4.x，
-   还需给出策略下限（GmSSL 的 `CMakeLists.txt` 是老写法）：
-   ```bash
-   GMSSL_CMAKE_DEFINES="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" maturin build --release
-   ```
+5. **从源码构建需要 CMake ≥ 3.6**（wheel 不需要）：GmSSL 由 CMake 构建。
+   环境变量 `GMSSL_CMAKE_DEFINES` 是上游留的透传通道，**当前不需要用**——GmSSL 3.1.1 的
+   `cmake_minimum_required(VERSION 3.6)` 在 CMake 4.x 下同样合法。真要用它时写法是
+   `KEY=value`（库会自己加 `-D`），多写一个 `-D` 只会得到 `-DKEY` 这种假变量。
 
 ## 性能（本仓库实测）
 
@@ -106,13 +113,14 @@ CPython 3.9.6）/ 64 MiB 缓冲 / SM2 各 2000 次。
 | snowland-smx | SM3 | 159.4 MiB/s | 0.3 MiB/s | 562× |
 | snowland-smx | SM4-CBC | 95.3 MiB/s | 0.1 MiB/s | 823× |
 
-⚠️ **arm64 数字尚未实测**（本机 Rust 工具链是 Rosetta x86_64），待 CI 在 arm64 runner 上补测。
+⚠️ **arm64 的性能数字尚未实测**：arm64 wheel 已由 CI 产出（可安装可用），但 `benches/bench.py`
+只在 Rosetta x86_64 上跑过，要在 README 引用 arm64 数字得先在 arm64 上跑一次。
 ⚠️ 复现：`python benches/bench.py`；任何对外引用的性能数字都必须来自它。
 
 ## 开发
 
 ```bash
-maturin develop --release            # CMake ≥ 4 需带 GMSSL_CMAKE_DEFINES
+maturin develop --release
 pytest -q                            # 含 4 条存量 golden 与双向对拍
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings

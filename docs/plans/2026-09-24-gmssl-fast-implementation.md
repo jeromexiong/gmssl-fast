@@ -779,8 +779,10 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 
 - [x] `pip install gmssl-fast` 后，`tests/` 全部通过（含 4 条 fastapiadmin golden 与双向对拍）
       —— 用**真 wheel** 验证：`maturin build --release --locked` → `pip install dist/*.whl` → `pytest` 58 passed
-- [ ] 4 个平台各产出 1 个 abi3 wheel，且在 CI 上跑过测试
-      —— **未完成**：流水线已就绪，但尚未 push 到 GitHub 触发；本机只能产出 x86_64 macOS 轮子
+- [x] 各平台产出 1 个 abi3 wheel，且在 CI 上跑过测试
+      —— **3 个平台已达成**（Linux manylinux / macOS arm64 / macOS x86_64，2026-09-24 CI 实测）；
+      **Windows 从矩阵移除**：上游 cmake-rs 与 GmSSL 的 `#ifdef WIN32` 冲突，MSVC 下编不过
+      （设计 §10），拿下它要走 R3
 - [x] 代码里不存在 `fmt=` 参数、不存在 `unsafe`、不存在暴露给调用方的 GCM tag 长度
       —— grep 复核：`unsafe` 只出现在 `src/sm2_fmt.rs` 的注释里；`GCM_TAG_LEN` 是常量、不是入参
 - [x] README 的性能数字全部来自 `benches/` 实测，且标注测试机架构（Rosetta x86_64，arm64 标「待补测」）
@@ -807,8 +809,18 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 | 5 SM2 API + golden 对拍 | `1196b86` | 存量密文/签名可直接读 |
 | 6 compat 门面 | `4fea7c0` | 含 `sm2_public_key` 注入的取舍 |
 | 7 与存量实现双向对拍 | `628df2d` | 与 snowland-smx 逐字节一致 |
-| 8 CI + 4 平台发布流水 | `92a9650` | cmake 用幂等兜底 + 首跑日志自证 |
+| 8 CI + 3 平台发布流水 | `92a9650` | Windows 腿实测失败已移除（见下）；cmake 幂等兜底 + 首跑日志自证 |
 | 9 README + 基准 | `acda5c4` | 顺手定位了 SM2 签名慢 45% 的根因 |
+
+### 推 GitHub 之后的收尾（2026-09-24）
+
+- 仓库：`github.com/jeromexiong/gmssl-fast`（**私有**，可随时改公开）。推送时网络抖动
+  （直连与代理都不稳），靠重试成功；`gh` token 含 `workflow` scope，CI 文件可直接推。
+- **CI 实测**：`main` 上的 test job ✓（1m53s）；`workflow_dispatch` 跑整套矩阵 →
+  Linux x86_64（manylinux）✓ / macOS arm64 ✓ / macOS x86_64 ✓；**Windows ✗**（已移除）。
+- 新增能力：`workflow_dispatch` 可在不打 tag 的情况下跑完整 wheel 矩阵（publish 仍只在 tag 上）。
+- ⚠️ **`v0.1.0` tag 已删除**：`publish` job 需要 `TEST_PYPI_API_TOKEN`，未配置时 tag 跑必然红；
+  配好 secret 再打即可（`git tag v0.1.0 && git push origin v0.1.0`）。
 
 ### 与计划的偏差（均已记录理由）
 
@@ -816,7 +828,16 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 2. **`extension-module` 只写在 `pyproject.toml`**：写进 `Cargo.toml` 会让 `cargo test` 链接失败。
 3. **CI 测试链路改为「构建 wheel → 装 wheel → pytest」**：CI 没有 venv，`maturin develop` 用不了；
    顺带把打包本身也纳入验证。
-4. **manylinux 的 cmake 未能在真容器里实测**：本机无 docker、podman 拉不到 maturin 镜像 →
-   改为幂等安装兜底 + 无条件 `cmake --version`，让首跑把答案变成事实。
+4. **manylinux 的 cmake（原计划最大未知项）已有结论**：CI 上 Linux 腿构建通过、产物带 manylinux 标签；
+   流水线保留幂等兜底（本机没能在真容器里跑过）。
 5. **SM2 签名性能**：库级 1395 ops/s 低于 C 层基线 2538 ops/s，根因是每次调用重建 PKCS#8
    （GmSSL 校验公钥字段 = 一次额外 EC 乘法）；已登记为后续可选优化（设计 §10）。
+6. **Windows 从矩阵移除**：CI 实测 3 次均失败（GmSSL 用 `#ifdef WIN32`，而 cmake-rs 顶掉了 CMake
+   平台默认的 `/DWIN32` → MSVC 缺 `dlfcn.h` / `netdb.h`）；`CMAKE_C_FLAGS` 与
+   `CMAKE_C_FLAGS_RELEASE` 两条路都试过，宏都没到达 cl.exe。要 Windows 得走 R3
+   （设计 §9 触发器 5、§10）。
+7. **`GMSSL_CMAKE_DEFINES` 一直是空操作**（计划里 10 处命令都带着它）：GmSSL **3.1.1** 的
+   `cmake_minimum_required(VERSION 3.6)` 在 CMake 4.x 下合法，本就不需要策略下限；且该变量按
+   `KEY=value` 交给 cmake-rs（它自己再加 `-D`），多写的 `-D` 让 CMakeCache 里出现的是
+   `-DCMAKE_POLICY_VERSION_MINIMUM` 这个**假变量**。已从 CI / README / 设计 §5 移除；
+   计划正文里的旧命令保留为历史记录。
