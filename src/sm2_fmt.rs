@@ -157,6 +157,144 @@ fn write_sequence(out: &mut Vec<u8>, body: &[u8]) {
     out.extend_from_slice(body);
 }
 
+// ------------------------------------------------------------------ SM2 密钥 DER
+//
+// GmSSL 只有「裸标量 ↔ PKCS#8 / SPKI」的入口（`sm2_private_key_info_from_der` /
+// `sm2_public_key_info_from_der`），没有直接导入裸标量/裸公钥点的接口，
+// 所以这两个方向的 DER 由本层构造。
+
+/// OID `id-ecPublicKey` (1.2.840.10045.2.1)
+const OID_EC_PUBLIC_KEY: &[u8] = &[0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01];
+/// OID `sm2` (1.2.156.10197.1.301)
+const OID_SM2_CURVE: &[u8] = &[0x06, 0x08, 0x2A, 0x81, 0x1C, 0xCF, 0x55, 0x01, 0x82, 0x2D];
+const TAG_BIT_STRING: u8 = 0x03;
+/// 未压缩公钥点长度 `04‖X(32)‖Y(32)`
+const POINT_BYTES: usize = 65;
+
+fn write_tlv(out: &mut Vec<u8>, tag: u8, content: &[u8]) {
+    out.push(tag);
+    write_len(out, content.len());
+    out.extend_from_slice(content);
+}
+
+/// `AlgorithmIdentifier ::= SEQUENCE { id-ecPublicKey, sm2 }`
+fn algorithm_identifier() -> Vec<u8> {
+    let mut algo = Vec::new();
+    algo.extend_from_slice(OID_EC_PUBLIC_KEY);
+    algo.extend_from_slice(OID_SM2_CURVE);
+
+    let mut seq = Vec::new();
+    write_sequence(&mut seq, &algo);
+    seq
+}
+
+/// 构造 X.509 `SubjectPublicKeyInfo` DER。
+pub fn spki_public_der(point: &[u8; POINT_BYTES]) -> Vec<u8> {
+    let mut bits = Vec::with_capacity(POINT_BYTES + 1);
+    bits.push(0x00); // 未使用位数
+    bits.extend_from_slice(point);
+
+    let mut body = algorithm_identifier();
+    write_tlv(&mut body, TAG_BIT_STRING, &bits);
+
+    let mut out = Vec::new();
+    write_sequence(&mut out, &body);
+    out
+}
+
+/// 解析 X.509 `SubjectPublicKeyInfo`，取出未压缩点 `04‖X‖Y`。
+pub fn spki_point(der: &[u8]) -> Result<[u8; POINT_BYTES]> {
+    let mut pos = 0;
+    let seq = read_tlv(der, &mut pos, TAG_SEQUENCE)?;
+    if pos != der.len() {
+        return Err(invalid("公钥 DER 尾部有多余数据"));
+    }
+
+    let mut inner = 0;
+    let _algorithm = read_tlv(seq, &mut inner, TAG_SEQUENCE)?;
+    let bits = read_tlv(seq, &mut inner, TAG_BIT_STRING)?;
+    if inner != seq.len() {
+        return Err(invalid("公钥 DER 结构不符合预期"));
+    }
+    if bits.first() != Some(&0) {
+        return Err(invalid("公钥 BIT STRING 的未使用位数必须为 0"));
+    }
+
+    let point = bits
+        .get(1..)
+        .ok_or_else(|| invalid("公钥 BIT STRING 过短"))?;
+    point
+        .try_into()
+        .map_err(|_| invalid("SM2 公钥点必须是 65 字节（04‖X‖Y）"))
+}
+
+/// 构造 PKCS#8 `PrivateKeyInfo` DER。
+///
+/// `point` 为 `Some` 时写入 `[1]` 公钥字段（GmSSL 会校验其与标量是否匹配）；
+/// 为 `None` 时省略，由 GmSSL 自行派生公钥（已实测可行）。
+pub fn pkcs8_private_der(
+    scalar: &[u8; SCALAR_BYTES],
+    point: Option<&[u8; POINT_BYTES]>,
+) -> Vec<u8> {
+    // 内层 SEC1 ECPrivateKey
+    let mut ec = Vec::new();
+    write_scalar(&mut ec, &[0x01]); // version = 1
+    write_octet_string(&mut ec, scalar);
+    write_tlv(&mut ec, 0xA0, OID_SM2_CURVE); // [0] parameters
+    if let Some(point) = point {
+        let mut bits = Vec::with_capacity(POINT_BYTES + 1);
+        bits.push(0x00);
+        bits.extend_from_slice(point);
+
+        let mut field = Vec::new();
+        write_tlv(&mut field, TAG_BIT_STRING, &bits);
+        write_tlv(&mut ec, 0xA1, &field); // [1] publicKey
+    }
+    let mut ec_seq = Vec::new();
+    write_sequence(&mut ec_seq, &ec);
+
+    // 外层 PrivateKeyInfo
+    let mut body = Vec::new();
+    write_scalar(&mut body, &[0x00]); // version = 0
+    body.extend_from_slice(&algorithm_identifier());
+    write_octet_string(&mut body, &ec_seq);
+
+    let mut out = Vec::new();
+    write_sequence(&mut out, &body);
+    out
+}
+
+/// 从 PKCS#8 `PrivateKeyInfo` 中取出 32 字节私钥标量。
+pub fn pkcs8_scalar(der: &[u8]) -> Result<[u8; SCALAR_BYTES]> {
+    let mut pos = 0;
+    let seq = read_tlv(der, &mut pos, TAG_SEQUENCE)?;
+    if pos != der.len() {
+        return Err(invalid("私钥 DER 尾部有多余数据"));
+    }
+
+    let mut inner = 0;
+    let _version = read_scalar(seq, &mut inner)?;
+    let _algorithm = read_tlv(seq, &mut inner, TAG_SEQUENCE)?;
+    let ec = read_tlv(seq, &mut inner, TAG_OCTET_STRING)?;
+    if inner != seq.len() {
+        return Err(invalid("私钥 DER 结构不符合预期"));
+    }
+
+    let mut ec_pos = 0;
+    let ec_seq = read_tlv(ec, &mut ec_pos, TAG_SEQUENCE)?;
+    if ec_pos != ec.len() {
+        return Err(invalid("ECPrivateKey 尾部有多余数据"));
+    }
+
+    let mut ec_inner = 0;
+    let _ec_version = read_scalar(ec_seq, &mut ec_inner)?;
+    let scalar = read_tlv(ec_seq, &mut ec_inner, TAG_OCTET_STRING)?;
+    let scalar: [u8; SCALAR_BYTES] = scalar
+        .try_into()
+        .map_err(|_| invalid("私钥标量必须是 32 字节"))?;
+    Ok(scalar)
+}
+
 // ------------------------------------------------------------------ 对外接口
 
 /// DER 签名（`SEQUENCE{INTEGER r, INTEGER s}`）→ 裸 `r‖s`（64 字节）。
@@ -338,5 +476,41 @@ mod tests {
         seq.push(oversized.len() as u8);
         seq.extend_from_slice(&oversized);
         assert!(ct_der_to_raw(&seq).is_err());
+    }
+
+    fn sample_point() -> [u8; POINT_BYTES] {
+        let mut point = [0u8; POINT_BYTES];
+        point[0] = 0x04;
+        for (i, byte) in point[1..].iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(3).wrapping_add(5);
+        }
+        point
+    }
+
+    #[test]
+    fn spki_roundtrip() {
+        let point = sample_point();
+        let der = spki_public_der(&point);
+        assert_eq!(der[0], TAG_SEQUENCE);
+        assert_eq!(spki_point(&der).unwrap(), point);
+    }
+
+    #[test]
+    fn pkcs8_public_key_field_is_optional() {
+        let scalar = [0x42u8; SCALAR_BYTES];
+        let with_point = pkcs8_private_der(&scalar, Some(&sample_point()));
+        let without = pkcs8_private_der(&scalar, None);
+        assert_eq!(with_point[0], TAG_SEQUENCE);
+        assert_eq!(without[0], TAG_SEQUENCE);
+        assert!(with_point.len() > without.len());
+    }
+
+    #[test]
+    fn pkcs8_scalar_roundtrip() {
+        let scalar = [0x5Au8; SCALAR_BYTES];
+        let with_point = pkcs8_private_der(&scalar, Some(&sample_point()));
+        let without = pkcs8_private_der(&scalar, None);
+        assert_eq!(pkcs8_scalar(&with_point).unwrap(), scalar);
+        assert_eq!(pkcs8_scalar(&without).unwrap(), scalar);
     }
 }

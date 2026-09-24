@@ -4,6 +4,7 @@
 //! 面向使用者的友好 API 与 drop-in 门面在 `python/gmssl_fast/` 下用 Python 实现。
 
 mod errors;
+mod sm2;
 pub mod sm2_fmt;
 mod sm3;
 mod sm4;
@@ -12,6 +13,12 @@ use pyo3::prelude::*;
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(sm2::sm2_generate, m)?)?;
+    m.add_function(wrap_pyfunction!(sm2::sm2_encrypt_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(sm2::sm2_decrypt_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(sm2::sm2_sign_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(sm2::sm2_verify_raw, m)?)?;
+
     m.add_function(wrap_pyfunction!(sm3::sm3, m)?)?;
     m.add_function(wrap_pyfunction!(sm3::sm3_hmac, m)?)?;
     m.add_function(wrap_pyfunction!(sm3::sm3_pbkdf2, m)?)?;

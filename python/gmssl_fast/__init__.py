@@ -28,6 +28,7 @@ __all__ = [
     "GmsslError",
     "GmsslValueError",
     "GmsslVerificationError",
+    "SM2",
     "SM4",
     "SM4GCM",
     "sm3",
@@ -138,3 +139,94 @@ class SM4GCM:
         if len(tag) != 16:
             raise ValueError("SM4-GCM 的 tag 必须是 16 字节")
         return _core.sm4_gcm_decrypt(self._key, self._nonce, aad, ciphertext, tag)
+
+
+def _validate_hex(value: str, length: int, what: str) -> None:
+    if len(value) != length:
+        raise ValueError(f"{what}必须是 {length} 个十六进制字符，实际 {len(value)}")
+    try:
+        bytes.fromhex(value)
+    except ValueError as exc:  # 非十六进制
+        raise ValueError(f"{what}不是合法十六进制") from exc
+
+
+class SM2:
+    """SM2 非对称加密 / 签名。
+
+    **只使用裸格式**：
+
+    - 密文 = 裸 C1C3C2 = ``x(32)‖y(32)‖C3(32)‖C2(n)``，长度 ``96 + n``
+    - 签名 = 裸 r‖s，64 字节
+
+    与 ``sm-crypto`` / ``gm_crypto`` 以及既有存量数据一致（DER 只是库内部调 GmSSL 的实现细节）。
+
+    公钥接受 128（``X‖Y``）与 130（``04‖X‖Y``）字符两种输入。
+
+    ⚠️ **私钥操作（``decrypt`` / ``sign``）必须同时提供公钥**：GmSSL 的 PKCS#8 解析
+    要求公钥字段存在，且未暴露「由标量派生公钥」的接口（已实测）。这也与既有调用
+    形态一致（``sign(private_key, public_key, data)``）。
+
+    ⚠️ 加密明文上限 **255 字节**（GmSSL 限制），不要用它加密长数据。
+    """
+
+    def __init__(
+        self, private_key: str | None = None, public_key: str | None = None
+    ) -> None:
+        if private_key is not None:
+            _validate_hex(private_key, 64, "SM2 私钥")
+        if public_key is not None:
+            if len(public_key) == 130:
+                if not public_key.startswith("04"):
+                    raise ValueError("130 字符的 SM2 公钥必须以 04 开头")
+                body = public_key[2:]
+            elif len(public_key) == 128:
+                # 注意：不能按「是否以 04 开头」判断前缀——x 坐标首字节本身可能就是 04
+                body = public_key
+            else:
+                raise ValueError("SM2 公钥必须是 128 或 130 个十六进制字符")
+            _validate_hex(body, 128, "SM2 公钥")
+        if private_key is not None and public_key is None:
+            raise ValueError(
+                "SM2 私钥操作需要同时提供公钥（GmSSL 的 PKCS#8 解析要求公钥字段，已实测）"
+            )
+        self._private_key = private_key
+        self._public_key = public_key
+
+    @classmethod
+    def generate(cls) -> "SM2":
+        """生成密钥对。"""
+        private_key, public_key = _core.sm2_generate()
+        return cls(private_key=private_key, public_key=public_key)
+
+    @property
+    def private_key_hex(self) -> str | None:
+        return self._private_key
+
+    @property
+    def public_key_hex(self) -> str | None:
+        """130 字符（含 04 前缀）。"""
+        return self._public_key
+
+    def encrypt(self, data: bytes) -> bytes:
+        """加密，返回裸 C1C3C2；明文上限 255 字节。"""
+        if self._public_key is None:
+            raise ValueError("SM2 加密需要公钥")
+        return _core.sm2_encrypt_raw(self._public_key, data)
+
+    def decrypt(self, ciphertext: bytes) -> bytes:
+        """解密裸 C1C3C2（内部按「原样 / 剥掉 04」两候选试解）。"""
+        if self._private_key is None:
+            raise ValueError("SM2 解密需要私钥")
+        return _core.sm2_decrypt_raw(self._private_key, self._public_key, ciphertext)
+
+    def sign(self, data: bytes) -> bytes:
+        """签名，返回裸 r‖s（64 字节）；签名者标识用 GmSSL 默认值。"""
+        if self._private_key is None:
+            raise ValueError("SM2 签名需要私钥")
+        return _core.sm2_sign_raw(self._private_key, self._public_key, data)
+
+    def verify(self, data: bytes, signature: bytes) -> bool:
+        """校验裸 r‖s 签名。"""
+        if self._public_key is None:
+            raise ValueError("SM2 验签需要公钥")
+        return _core.sm2_verify_raw(self._public_key, data, signature)
