@@ -5,13 +5,9 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  # 手动触发可以在不打 tag 的情况下跑完整 4 平台 wheel（publish 仍然只在 tag 上跑），
+  # 用来验证平台构建而不惊动 PyPI。
   workflow_dispatch:
-
-env:
-  # GmSSL 的 CMakeLists 用的是 3.5 之前的写法：CMake 4.x 会直接报错终止，
-  # 必须给出策略下限；CMake 3.x 会忽略它（只多一个未被使用的 cache 变量），
-  # 因此可以无条件带上，不必区分平台与镜像。
-  GMSSL_CMAKE_DEFINES: "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 jobs:
   # ------------------------------------------------------------ PR 门禁（只要 Linux，快）
@@ -66,7 +62,7 @@ jobs:
   wheels:
     name: wheel / ${{ matrix.target }}
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -90,6 +86,12 @@ jobs:
 
       - name: 构建 wheel
         uses: PyO3/maturin-action@v1
+        env:
+          # 仅 Windows 需要：cmake-rs 会自己 -DCMAKE_C_FLAGS=…，把 CMake 平台默认的
+          # /DWIN32 /D_WINDOWS 顶掉，而 GmSSL 的 api.h / dylib.h 用 #ifdef WIN32
+          # ↳ 走 POSIX 分支 → MSVC 报 C1083 缺 dlfcn.h。这里把它补回来。
+          # 写法是 KEY=value（cmake-rs 自己会加 -D），值的空格用 ';' 代替（CMake 列表分隔符）。
+          GMSSL_CMAKE_DEFINES: ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'CMAKE_C_FLAGS=/DWIN32;/D_WINDOWS' || '' }}
         with:
           target: ${{ matrix.target }}
           # 非 Linux 腿的矩阵项没有 manylinux 字段（null）→ 回退成 'auto'，
@@ -99,11 +101,9 @@ jobs:
           # manylinux 镜像应该自带 cmake（pypa/manylinux 的 issue 就在用容器内的 cmake），
           # 但本机拉不到镜像、没能在真容器里验证 → 缺失就兜底安装；
           # `cmake --version` 无条件执行，首跑日志会把真实版本变成确定事实。
-          # 工作流级 env 不一定能传进容器，所以这里再显式导出一遍。
           before-script-linux: |
             command -v cmake >/dev/null 2>&1 || python3 -m pip install cmake
             cmake --version
-            export GMSSL_CMAKE_DEFINES="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
       - name: 校验产物（Linux 必须是 manylinux，PyPI 不接受裸 linux_x86_64）
         if: matrix.manylinux == 'auto'
