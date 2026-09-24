@@ -1,0 +1,142 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # GmSSL 的 CMakeLists 用的是 3.5 之前的写法：CMake 4.x 会直接报错终止，
+  # 必须给出策略下限；CMake 3.x 会忽略它（只多一个未被使用的 cache 变量），
+  # 因此可以无条件带上，不必区分平台与镜像。
+  GMSSL_CMAKE_DEFINES: "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
+jobs:
+  # ------------------------------------------------------------ PR 门禁（只要 Linux，快）
+  test:
+    name: fmt / clippy / cargo test / pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 环境自检（GmSSL 由 CMake 构建，缺 cmake 必须在这里就暴露）
+        run: |
+          cmake --version
+          cargo --version
+          python --version
+
+      - name: 安装构建与测试依赖
+        # snowland-smx 是「旧库」：tests/test_cross_fastapiadmin.py 用它做双向对拍，
+        # 缺了该文件会整体 skip —— CI 里要真的跑，所以必须装。
+        run: pip install -U maturin pytest snowland-smx
+
+      - name: 格式
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Rust 单元测试
+        run: cargo test --locked
+
+      - name: 构建 wheel
+        run: maturin build --release --locked --out dist
+
+      - name: 安装 wheel
+        # CI 没有 venv，maturin develop 用不了；改成装真轮子——
+        # 这样测的就是用户最终拿到的那份产物，顺带验证打包本身。
+        run: pip install --force-reinstall --no-deps dist/*.whl
+
+      - name: Python 测试
+        run: pytest -q
+
+  # ------------------------------------------------------------ 4 平台 abi3 wheel
+  wheels:
+    name: wheel / ${{ matrix.target }}
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            manylinux: auto
+          - target: aarch64-apple-darwin
+            os: macos-latest # arm64
+          - target: x86_64-apple-darwin
+            os: macos-15-intel # 唯一还在售的 Intel macOS runner
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 构建 wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --out dist
+          # manylinux 镜像应该自带 cmake（pypa/manylinux 的 issue 就在用容器内的 cmake），
+          # 但本机拉不到镜像、没能在真容器里验证 → 缺失就兜底安装；
+          # `cmake --version` 无条件执行，首跑日志会把真实版本变成确定事实。
+          # 工作流级 env 不一定能传进容器，所以这里再显式导出一遍。
+          before-script-linux: |
+            command -v cmake >/dev/null 2>&1 || python3 -m pip install cmake
+            cmake --version
+            export GMSSL_CMAKE_DEFINES="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
+      - name: 校验产物（Linux 必须是 manylinux，PyPI 不接受裸 linux_x86_64）
+        if: matrix.manylinux == 'auto'
+        run: |
+          ls -l dist
+          ls dist/*manylinux*.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+
+  # ------------------------------------------------------------ 发布（单独一个 job，避免矩阵内竞争）
+  publish:
+    name: publish to PyPI
+    needs: wheels
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # 供 Trusted Publishing 使用（配置后可删掉下面的 password）
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: 发布前清点
+        run: ls -l dist && ls dist/*.whl | wc -l
+
+      - name: 发布
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # 首次先发 TestPyPI 验证（需要 secrets.TEST_PYPI_API_TOKEN）；
+          # 确认无误后删掉 repository-url，并换成 secrets.PYPI_API_TOKEN 或 Trusted Publishing。
+          repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
