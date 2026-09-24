@@ -252,6 +252,30 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
 ——实测分别为 94 MiB/s 与 2538 ops/s（差 43 倍）。性能数字一律以本仓库
 `benches/` 实测为准。
 
+### 8.1 库级实测（`benches/bench.py`，2026-09-24）
+
+上表是 C 层基线（密钥对象在循环外构造一次）。下表是**通过 Python API 调用**的实测，
+读者实际拿到的是这一组。口径一致：release 构建、一次性大缓冲、SM2 各 2000 次、
+每项取 3 次最快；测试机 macOS 26.5.2 / **x86_64（Rosetta）** / CPython 3.9.6。
+
+| 操作 | 库级实测 | 对比 C 层基线 |
+|---|---|---|
+| SM3 | **158.0 MiB/s** | 持平 |
+| SM4-CBC | **94.2 MiB/s** | 持平 |
+| SM4-GCM | **39.5 MiB/s** | 持平 |
+| SM2 签名 | **1395 ops/s** | **−45%** |
+| SM2 验签 | **1583 ops/s** | 持平 |
+
+**签名慢 45% 的根因（已定位，非推测）**：`sign_raw` 每次调用都走
+`scalar_key()` → 手拼 PKCS#8 DER → `Sm2Key::from_private_key_der()`，而
+**GmSSL 解析时会校验 `[1]` 公钥字段与标量是否匹配（一次额外的 EC 乘法）**；
+C 层基线把密钥构造放在循环外。验签只解析 SPKI 公钥（点合法性检查，便宜），故持平。
+「两候选试解 / ZA 拼装 / DER↔裸格式转换」均已排除，不是瓶颈。
+
+**纯 Python 对照**（`snowland-smx`，同机 1 MiB 缓冲）：SM3 **562×**、SM4-CBC **823×**。
+
+⚠️ **arm64 数字未实测**（本机 Rust 是 Rosetta x86_64）→ README 已标注「待 CI 补测」。
+
 ⚠️ **本仓库默认构建不带任何硬件加速**：GmSSL 3.1.1/3.2.0 的加速开关全默认 OFF，
 上游 `gmssl-rs-sys` 也只开了 `ENABLE_SM2_PRIVATE_KEY_EXPORT`。3.1.1 在 arm64 上
 **没有可用加速**（只有 x86 的 `ENABLE_SM4_AESNI_AVX`）。追求加速的路线见 §9 R3。
@@ -303,7 +327,16 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
 - **arm64 原生性能未测**：本机无法测（工具链是 Rosetta x86_64、无 rustup）。
   若要在 README 里写 arm64 数字，需在 CI（macos-14 runner）或原生 arm64 机器上补测。
 - **上游单点维护**：见 §9 R3 预案。
-- **manylinux 容器是否自带 cmake**：首个 PR 就要验证（§5）。
+- **manylinux 容器是否自带 cmake（原「最大未知项」）**：已改判为**可接受风险**。
+  本机无 docker、podman 可用但 maturin 镜像最终没拉下来，**未能在真容器里实测**；
+  间接证据（`pypa/manylinux` 的 issue 标题就写着「cmake ... in
+  manylinux_2014_x86_64 container」「chore: update cmake」）表明镜像内有 cmake。
+  流水线因此写成幂等 + 自证：`command -v cmake || python3 -m pip install cmake`，
+  并**无条件 `cmake --version`**——首跑日志会把版本变成确定事实。
+- **SM2 签名的密钥缓存优化（新增，有实测依据）**：库级 1395 ops/s 比 C 层基线低 45%，
+  全花在每次调用重新解析 PKCS#8（含一次 EC 乘法校验公钥）。若后续确实成为瓶颈，
+  可暴露一个持有 `Sm2Key` 的句柄对象（类似 `SM4` 实例）把密钥缓存到 C 层；
+  当前调用量（每条日志一次签名）下不值得做，故不做。
 - **PyPI 占名**：`gmssl-fast` 当前 404（未占用），但名字随时可能被抢，尽早发布 0.1.0。
 
 ## 11. fastapiadmin 迁移（第二阶段）
