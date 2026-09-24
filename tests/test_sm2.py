@@ -108,6 +108,47 @@ def test_rejects_plaintext_over_255_bytes() -> None:
     sm2 = gmssl_fast.SM2(public_key=GOLDEN_SM2_PUB)
     with pytest.raises(gmssl_fast.GmsslValueError):
         sm2.encrypt(bytes(256))
+
+
+# ---------------------------------------------------------------- 密钥句柄（性能路径）
+def test_key_handle_matches_free_functions() -> None:
+    """缓存句柄（快路径）必须与「每次重新解析密钥」的自由函数语义完全等价。"""
+    core = gmssl_fast._core  # noqa: SLF001 - 正是要验证这层内部实现
+    msg = GOLDEN_SM2_MSG.encode("utf-8")
+    handle = core.Sm2KeyHandle(GOLDEN_SM2_PRIV, GOLDEN_SM2_PUB)
+
+    # 签名：双向互认
+    from_handle = handle.sign(msg)
+    assert len(from_handle) == 64
+    assert core.sm2_verify_raw(GOLDEN_SM2_PUB, msg, from_handle) is True
+    assert handle.verify(msg, core.sm2_sign_raw(GOLDEN_SM2_PRIV, GOLDEN_SM2_PUB, msg)) is True
+
+    # 加解密：双向互通
+    assert core.sm2_decrypt_raw(GOLDEN_SM2_PRIV, GOLDEN_SM2_PUB, handle.encrypt(msg)) == msg
+    assert handle.decrypt(core.sm2_encrypt_raw(GOLDEN_SM2_PUB, msg)) == msg
+
+    # 两候选试解在句柄里同样生效（老实现的 04 前缀 + 首字节本身就是 0x04 的合法密文）
+    assert handle.decrypt(b"\x04" + GOLDEN_SM2_CT) == msg
+    assert handle.decrypt(GOLDEN_SM2_CT_LEADING_04) == msg
+
+
+def test_key_handle_needs_a_key_and_private_ops_need_private() -> None:
+    core = gmssl_fast._core  # noqa: SLF001
+    with pytest.raises(ValueError, match="至少需要私钥或公钥"):
+        core.Sm2KeyHandle()
+
+    public_only = core.Sm2KeyHandle(None, GOLDEN_SM2_PUB)
+    assert public_only.encrypt(b"x")  # 公钥操作可用
+    with pytest.raises(ValueError, match="只有公钥"):
+        public_only.sign(b"x")
+    with pytest.raises(ValueError, match="只有公钥"):
+        public_only.decrypt(GOLDEN_SM2_CT)
+
+
+def test_sm2_object_builds_the_handle_once() -> None:
+    """优化契约：同一个 SM2 实例只解析密钥一次（签名吞吐 1395 → ~2500 ops/s 的来源）。"""
+    sm2 = gmssl_fast.SM2(private_key=GOLDEN_SM2_PRIV, public_key=GOLDEN_SM2_PUB)
+    assert sm2._key() is sm2._key()  # noqa: SLF001
     assert len(sm2.encrypt(bytes(255))) == 96 + 255
 
 

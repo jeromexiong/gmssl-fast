@@ -191,6 +191,17 @@ class SM2:
             )
         self._private_key = private_key
         self._public_key = public_key
+        self._handle: _core.Sm2KeyHandle | None = None
+
+    def _key(self) -> _core.Sm2KeyHandle:
+        """密钥句柄（懒建后缓存）。
+
+        GmSSL 解析 PKCS#8 时会校验 `[1]` 公钥字段与标量是否匹配（一次额外的 EC 乘法），
+        因此每次调用都重建密钥会让签名吞吐腰斩（实测 1395 vs ~2500 ops/s）。
+        """
+        if self._handle is None:
+            self._handle = _core.Sm2KeyHandle(self._private_key, self._public_key)
+        return self._handle
 
     @classmethod
     def generate(cls) -> "SM2":
@@ -211,22 +222,22 @@ class SM2:
         """加密，返回裸 C1C3C2；明文上限 255 字节。"""
         if self._public_key is None:
             raise ValueError("SM2 加密需要公钥")
-        return _core.sm2_encrypt_raw(self._public_key, data)
+        return self._key().encrypt(data)
 
     def decrypt(self, ciphertext: bytes) -> bytes:
         """解密裸 C1C3C2（内部按「原样 / 剥掉 04」两候选试解）。"""
         if self._private_key is None:
             raise ValueError("SM2 解密需要私钥")
-        return _core.sm2_decrypt_raw(self._private_key, self._public_key, ciphertext)
+        return self._key().decrypt(ciphertext)
 
     def sign(self, data: bytes) -> bytes:
         """签名，返回裸 r‖s（64 字节）；签名者标识用 GmSSL 默认值。"""
         if self._private_key is None:
             raise ValueError("SM2 签名需要私钥")
-        return _core.sm2_sign_raw(self._private_key, self._public_key, data)
+        return self._key().sign(data)
 
     def verify(self, data: bytes, signature: bytes) -> bool:
         """校验裸 r‖s 签名。"""
         if self._public_key is None:
             raise ValueError("SM2 验签需要公钥")
-        return _core.sm2_verify_raw(self._public_key, data, signature)
+        return self._key().verify(data, signature)

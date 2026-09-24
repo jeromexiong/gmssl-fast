@@ -18,6 +18,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sm2::sm2_decrypt_raw, m)?)?;
     m.add_function(wrap_pyfunction!(sm2::sm2_sign_raw, m)?)?;
     m.add_function(wrap_pyfunction!(sm2::sm2_verify_raw, m)?)?;
+    m.add_class::<sm2::Sm2KeyHandle>()?;
 
     m.add_function(wrap_pyfunction!(sm3::sm3, m)?)?;
     m.add_function(wrap_pyfunction!(sm3::sm3_hmac, m)?)?;

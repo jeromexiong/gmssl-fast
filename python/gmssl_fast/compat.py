@@ -27,11 +27,24 @@ from __future__ import annotations
 
 import os
 import secrets
+from functools import lru_cache
 
 from . import SM4, _core, sm3_password_hash, sm3_password_verify
 
 _sm2_public_key: str | None = None
 _sm4_key: str | None = None
+
+
+@lru_cache(maxsize=8)
+def _key_handle(
+    private_key: str | None, public_key: str | None
+) -> _core.Sm2KeyHandle:
+    """按 ``(私钥, 公钥)`` 缓存密钥句柄。
+
+    旧式静态方法没有实例可挂缓存，而 GmSSL 每次都要重新解析 PKCS#8（含一次校验公钥
+    是否匹配标量的 EC 乘法）——对「每条日志签一次」这种调用是纯浪费。
+    """
+    return _core.Sm2KeyHandle(private_key, public_key)
 
 
 def configure(*, sm2_public_key: str | None = None, sm4_key: str | None = None) -> None:
@@ -54,7 +67,7 @@ class Sm2Cipher:
     @staticmethod
     def encrypt(public_key: str, data: bytes) -> bytes:
         """加密，返回裸 C1C3C2（长度 ``96 + len(data)``）；明文上限 255 字节。"""
-        return _core.sm2_encrypt_raw(public_key, data)
+        return _key_handle(None, public_key).encrypt(data)
 
     @staticmethod
     def decrypt(private_key: str, ciphertext: bytes) -> bytes:
@@ -64,17 +77,17 @@ class Sm2Cipher:
                 "Sm2Cipher.decrypt 需要公钥：请先调用 "
                 "compat.configure(sm2_public_key=settings.SM2_PUBLIC_KEY)"
             )
-        return _core.sm2_decrypt_raw(private_key, _sm2_public_key, ciphertext)
+        return _key_handle(private_key, _sm2_public_key).decrypt(ciphertext)
 
     @staticmethod
     def sign(private_key: str, public_key: str, data: bytes) -> str:
         """签名，返回 128 个十六进制字符的裸 r‖s。"""
-        return _core.sm2_sign_raw(private_key, public_key, data).hex()
+        return _key_handle(private_key, public_key).sign(data).hex()
 
     @staticmethod
     def verify(public_key: str, data: bytes, signature: str) -> bool:
         """校验十六进制字符串形式的裸 r‖s 签名。"""
-        return _core.sm2_verify_raw(public_key, data, bytes.fromhex(signature))
+        return _key_handle(None, public_key).verify(data, bytes.fromhex(signature))
 
 
 class Sm3Cipher:
