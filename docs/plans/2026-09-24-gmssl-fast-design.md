@@ -16,8 +16,10 @@
 | wheel | **abi3-py38**，4 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64` / `win_amd64` |
 | 工具链 | pyo3 0.29.x（MSRV Rust 1.83）、maturin 1.15.x、CMake（构建前置） |
 | 包名 | `gmssl-fast`（PyPI 未占用，HTTP 404，发布前占名）；模块 `gmssl_fast` |
-| SM2 线格式 | **默认裸格式**（密文裸 C1C3C2、签名裸 r‖s），`fmt="raw"\|"der"` 可选——为兼容 sm-crypto / gm_crypto 与存量数据，见 §4.1 |
-| 对接目标 | 可直接接入 fastapiadmin 的国密契约；其 `tests/core/test_sm_crypto.py` 的 golden 向量作为验收标准，见 §7 |
+| SM2 线格式 | **裸格式，且是唯一行为**（密文裸 C1C3C2、签名裸 r‖s），**不暴露任何格式参数**；DER 只是内部实现细节，见 §4.1 |
+| 库内分层 | Rust 只做**算法原语**（`gmssl_fast._core`）；Python 侧写 API（`__init__.py`）与 drop-in 门面（`compat.py`），改接口不必碰 Rust |
+| 对接目标 | 让 fastapiadmin 的加密层**只剩设置注入 + ORM 胶水**：曲线常数 / ZA 拼装 / 摘要派生 / 格式转换 / 04 前缀 / PKCS7 / IV 打包全部下沉进库，见 §11 |
+| 验收标准 | fastapiadmin `tests/core/test_sm_crypto.py`（含 golden 向量）**原样跑绿** + 反向对拍，见 §7 |
 
 ## 1. 依赖链与版本锚点（已实测核实）
 
@@ -48,7 +50,7 @@ gmssl-fast（本项目，PyO3 扩展）
 | **GCM `ivlen` 不校验**（实测 1 / 8 / 16 字节都 Ok） | IV 复用 / 非标准 J0 推导 / 跨库不互通 | 绑定层**强制 12 字节** IV，其它长度直接 `ValueError` |
 | **CBC 无完整性**：错误 IV 解密返回 Ok（垃圾明文） | 用户可能误以为"解密成功 = 数据可信" | 文档明写"要完整性请用 GCM"；测试固化该行为 |
 | **`#define DEBUG 1` 硬编码**（`include/gmssl/error.h`），错误直接 `fprintf(stderr, "file:line:func():")`，无运行时开关 | 校验失败会污染宿主进程 stderr（FastAPI 日志里冒 `sm4_modes.c:191:...`） | **已知瑕疵**：crates.io 依赖是只读的，无法关；写进 README「已知行为」。若未来必须消除，只能走 §9 的 vendor 路线改这一行 |
-| SM2 加密明文 **≤ 255 字节**，密文是 **DER 编码**（首字节 0x30；255B 明文 → 364B 密文） | 拿 SM2 加密长数据会失败；密文与"裸 C1C3C2"不互通 | API 文档写明 255B 上限与 DER 格式；异常消息明确 |
+| SM2 加密明文 **≤ 255 字节**，GmSSL 原生密文是 **DER 编码**（首字节 0x30；255B 明文 → 364B 密文） | 拿 SM2 加密长数据会失败；DER 与前端要的「裸 C1C3C2」不互通 | ① 255B 上限写进 API 文档 + 异常消息；② DER ↔ 裸在库内转换，**对外不暴露**（见 §4.1） |
 | `sm2_encrypt` 内部有绕 GmSSL `*outlen=0` 回绕的补丁 | 已由上游处理 | 无需动作，仅记录 |
 | 上游为**单人维护**、仓库新（首个版本 2026-05-31）、下载量低 | 停更/跑路风险 | 见 §9 的 vendor 预案（R3），切换成本低 |
 
@@ -59,15 +61,19 @@ gmssl-fast/
 ├── .github/workflows/build.yml   # PR 流水 + Release 流水
 ├── Cargo.toml                    # pyo3 + gmssl-rs；crate-type = ["cdylib"]
 ├── Cargo.lock                    # 必须提交（--locked 构建，保证可复现）
-├── pyproject.toml                # maturin 后端 + 包元数据
-├── README.md                     # 安装 / 速查示例 / 已知行为 / 基准数字
+├── pyproject.toml                # maturin（python-source = "python"）+ 包元数据
+├── README.md                     # 安装 / 速查 / 已知行为 / 基准数字
 ├── docs/plans/                   # 本设计文档
-├── src/
-│   ├── lib.rs                    # 只做 pymodule 装配（不放逻辑）
+├── src/                          # ← Rust 只做算法原语
+│   ├── lib.rs                    # pymodule 装配（模块名 `_core`）
 │   ├── errors.rs                 # GmsslError → Python 异常映射（唯一映射点）
-│   ├── sm2.rs / sm3.rs / sm4.rs  # 各算法封装：参数校验 + 类型转换
-│   └── gmssl_fast.pyi + py.typed # 类型标注随包发布
-├── tests/                        # Python 集成测试（GM/T 标准向量 + 边界）
+│   ├── sm2.rs / sm3.rs / sm4.rs  # 参数校验 + 类型转换
+│   └── sm2_fmt.rs                # DER ↔ 裸 C1C3C2 / 裸 r‖s（纯安全 Rust）
+├── python/gmssl_fast/            # ← Python 侧写 API，改接口不用碰 Rust
+│   ├── __init__.py               # 现代 API：SM2 / SM3 / SM4
+│   ├── compat.py                 # drop-in 门面：Sm2Cipher / Sm3Cipher / Sm4Cipher
+│   └── py.typed
+├── tests/                        # Python 集成测试（GM/T 向量 + fastapiadmin golden 对拍）
 └── benches/                      # 对标 gmssl-rs 裸调用 / 纯 Python 的基准脚本
 ```
 
@@ -90,14 +96,14 @@ gcm = gm.SM4GCM(key, nonce)           # nonce 强制 12 字节
 ct, tag = gcm.encrypt(plaintext, aad=b"")   # tag 固定 16 字节，不暴露长度参数
 pt = gcm.decrypt(ct, tag, aad=b"")          # 失败抛 GmsslAuthError
 
-# SM2 —— 密钥对象风格
-sk = gm.SM2PrivateKey.from_hex(d)      # 或 .generate() / .from_pem(pem)
-pk = sk.public_key()                   # from_hex 兼容 128 / 130 字符公钥
-sig = sk.sign(msg)                     # fmt="raw"（默认）→ 裸 r‖s
-sig_der = sk.sign(msg, fmt="der")      # DER SEQUENCE{INTEGER r, INTEGER s}
-ok  = pk.verify(msg, sig)              # fmt 默认与签名一致；可传 id= 覆盖签名者标识
-ct  = pk.encrypt(b"...")               # fmt="raw"（默认）→ 裸 C1C3C2 = x(32)‖y(32)‖C3(32)‖C2(n)
-pt  = sk.decrypt(ct)                   # 自动试解「原样」与「剥掉 04 前缀」两个候选
+# SM2 —— 裸格式是唯一行为，没有任何格式参数
+sm2 = gm.SM2(private_key=d, public_key=p)   # 也可 gm.SM2.generate()
+ct  = sm2.encrypt(b"...")                   # 裸 C1C3C2；公钥兼容 128 / 130 字符
+pt  = sm2.decrypt(ct)                       # 内部按「原样 / 剥掉 04」两候选试解
+sig = sm2.sign(b"...")                      # -> bytes(64) 裸 r‖s
+ok  = sm2.verify(b"...", sig)               # -> bool
+```
+（ZA/E 由 GmSSL 内部按默认 ID `1234567812345678` 计算——**调用方不需要任何曲线常数**。）
 ```
 
 约定：
@@ -141,8 +147,40 @@ pt  = sk.decrypt(ct)                   # 自动试解「原样」与「剥掉 04
 `1234567812345678`）再算 `E = SM3(ZA‖M)`；而 GmSSL 的 `sm2_sign_init` 内部做的就是这套，
 默认 ID 相同（已实测「默认 ID 签名可被显式同 ID 验签 = true」）→ **不需要自算摘要**。
 
-**接入代价**：项目侧只改 `sm_crypto.py` 的实现体（import + 薄适配，约 10 行），
-`sm_crypto_util.py` 与所有调用方（登录流程、`Sm4CbcTypeHandler`、`PwdUtil`）**零改动**。
+**接入代价**：迁移后项目侧只剩「设置注入 + ORM 胶水」，详见 §11。
+
+### 4.2 「傻瓜式」接口：库吸收全部算法细节
+
+用户诉求：用库时**不希望再出现曲线常数、ZA 拼装、摘要派生、格式转换、PKCS7、IV 打包**这些杂项。
+边界划分：
+
+| 进库（本库职责） | 留在消费方（项目胶水） |
+|---|---|
+| SM2/SM3/SM4 全部算法细节、裸格式编解码、ZA/ID、04 前缀兼容、两候选试解、PKCS7、`iv‖ct` 打包 | 从 `settings` 读密钥、SQLAlchemy `TypeDecorator`、FastAPI 依赖注入 |
+
+```python
+# 接 §4 示例
+sm4 = gm.SM4(key)                            # 16 字节密钥
+blob = sm4.encrypt(b"...")                   # 随机 IV → 返回 iv(16)‖ct，PKCS7 自动
+sm4.decrypt(blob)                            # 自动取前 16 字节当 IV
+gm.sm3_password_hash("admin123")             # -> "salt$hash"（salt = secrets.token_hex(16)）
+gm.sm3_password_verify("admin123", stored)   # -> bool；格式不合法直接 False，不抛异常
+```
+
+**drop-in 门面 `gmssl_fast.compat`**（为从 `gmssl` / `snowland-smx` / 自研 util 迁移的用户，
+方法名与签名逐一对齐旧实现）：
+
+| 方法 | 签名 | 行为 |
+|---|---|---|
+| `Sm2Cipher.encrypt` | `(public_key: str, data: bytes) -> bytes` | 裸 C1C3C2；公钥 128 / 130 字符都可 |
+| `Sm2Cipher.decrypt` | `(private_key: str, ct: bytes) -> bytes` | 两候选试解（不做首字节启发式） |
+| `Sm2Cipher.sign` | `(priv: str, pub: str, data: bytes) -> str` | 返回 128 hex 裸 r‖s；`pub` 仅为兼容签名保留（ZA 用私钥内嵌公钥算） |
+| `Sm2Cipher.verify` | `(public_key: str, data: bytes, sig: str) -> bool` | 接受 128 hex 裸 r‖s |
+| `Sm3Cipher.hash / generate_salt / hash_password / verify_password` | 同旧实现 | `SM3(password + salt)`、`salt$hash` |
+| `Sm4Cipher.encrypt / decrypt / generate_key / get_config_key` | 同旧实现 | `iv(16)‖ct` + PKCS7；`get_config_key()` 默认读环境变量 `SM4_KEY`，可用 `compat.configure(sm4_key=...)` 覆盖 |
+
+对齐依据：`fastapiadmin/backend/app/utils/sm_crypto_util.py` 只用到 `Sm2Cipher` 的 4 个、
+`Sm3Cipher` 的 4 个、`Sm4Cipher` 的 4 个方法（已逐条核对源码）。
 
 ## 5. 构建与 wheel 策略
 
@@ -260,11 +298,34 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
 
 ## 10. 未决 / 风险
 
-- **接入 fastapiadmin 的可行性已核实**（格式差异与对策见 §4.1）。待定：集成层
-  （`CommonCryptogramUtil` / `PwdUtil` / `Sm4CbcTypeHandler`）**是否进库** ——
-  建议不进：它们是消费方胶水，进库会把 SQLAlchemy / pydantic 拖成库依赖。
+- **集成层划分已定**（见 §4.2）：`CommonCryptogramUtil` / `Sm4CbcTypeHandler` 留消费方；
+  `PwdUtil` 的功能（`salt$hash`）收进库（`sm3_password_hash/verify`）。
 - **arm64 原生性能未测**：本机无法测（工具链是 Rosetta x86_64、无 rustup）。
   若要在 README 里写 arm64 数字，需在 CI（macos-14 runner）或原生 arm64 机器上补测。
 - **上游单点维护**：见 §9 R3 预案。
 - **manylinux 容器是否自带 cmake**：首个 PR 就要验证（§5）。
 - **PyPI 占名**：`gmssl-fast` 当前 404（未占用），但名字随时可能被抢，尽早发布 0.1.0。
+
+## 11. fastapiadmin 迁移（第二阶段）
+
+**库先行**，分两阶段：
+
+- **阶段 1（本仓库）**：交付 `gmssl-fast` wheel —— Rust core + Python API + `compat` 门面。
+- **阶段 2（fastapiadmin）**：把加密层缩减成「设置注入 + ORM 胶水」，其余交给库。
+
+| 现状（`backend/app/utils/`） | 迁移后 |
+|---|---|
+| `sm_crypto.py` **约 470 行**：曲线常数 `a/b/xG/yG`、ZA 前缀、`_compute_sm2_digest`、`_new_sm2_signature`（含重试）、`_candidate_ciphertexts`、`_strip_04`、PKCS7、IV 拼接 | **删除该文件** |
+| `sm_crypto_util.py` 里 `CommonCryptogramUtil` 每方法 3~5 行 | 每方法 1 行（调用库） |
+| `PwdUtil.set_password_hash / verify_password` | 直接换成 `gm.sm3_password_hash / sm3_password_verify` |
+| `Sm4CbcTypeHandler`（SQLAlchemy `TypeDecorator`） | 保留（ORM 胶水），内部改调库的 `SM4` |
+| `from app.utils.sm_crypto import Sm2Cipher, Sm3Cipher, Sm4Cipher` | 改指 `gmssl_fast.compat`（或让 `sm_crypto.py` 退化成 5 行 re-export，则调用方零改动） |
+
+**验收（迁移完成的唯一标准）**：
+1. `backend/tests/core/test_sm_crypto.py` **39 条原样跑绿**（含 golden 密文 / 签名 / 密码哈希）；
+2. **反向对拍**：库产出的密文 / 签名 → 旧 `pysmx` 实现能解开 / 验过；
+3. **三端登录实测**：Web / UniApp / Flutter 的密文都能被新后端解密（沿用原流程）；
+4. **存量数据不动**：库里的 `salt$hash` 与日志里的签名继续可用。
+
+⚠️ 迁移**不得改动**：前端（`sm-crypto` / `gm_crypto`）、数据库已有数据、`salt$hash` 格式、
+SM4 的 `iv‖ct` 布局。
