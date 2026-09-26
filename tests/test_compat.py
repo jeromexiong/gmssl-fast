@@ -38,11 +38,26 @@ def test_sm2_call_shape_matches_legacy() -> None:
     assert compat.Sm2Cipher.verify(GOLDEN_SM2_PUB, b"other", signature) is False
 
 
-def test_sm2_decrypt_requires_configured_public_key() -> None:
-    # 旧的 decrypt 签名只有私钥，而底层构造私钥时必须同时给公钥
+def test_sm2_decrypt_works_without_configured_public_key() -> None:
+    # 旧的 decrypt 签名只有私钥：未 configure 时由库派生 d·G，不再要求注入公钥
     compat.configure(sm2_public_key=None)
-    with pytest.raises(ValueError, match="sm2_public_key"):
+    assert (
         compat.Sm2Cipher.decrypt(GOLDEN_SM2_PRIV, GOLDEN_SM2_CT)
+        == GOLDEN_SM2_MSG.encode()
+    )
+
+    # 注入公钥仍然可用（省掉派生那次 EC 乘法）
+    compat.configure(sm2_public_key=GOLDEN_SM2_PUB)
+    assert (
+        compat.Sm2Cipher.decrypt(GOLDEN_SM2_PRIV, GOLDEN_SM2_CT)
+        == GOLDEN_SM2_MSG.encode()
+    )
+
+    # 注入**错误**公钥必须报错，而不是静默解错
+    compat.configure(sm2_public_key="04" + "ab" * 64)
+    with pytest.raises(Exception):
+        compat.Sm2Cipher.decrypt(GOLDEN_SM2_PRIV, GOLDEN_SM2_CT)
+    compat.configure(sm2_public_key=None)  # 复位，避免影响其他用例
 
 
 def test_sm3_call_shape_matches_legacy() -> None:

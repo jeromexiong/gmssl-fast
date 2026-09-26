@@ -17,10 +17,9 @@
 
 之后调用方（``CommonCryptogramUtil``、``PwdUtil``、SQLAlchemy ``TypeDecorator`` 等）**零改动**。
 
-⚠️ **为什么需要 ``configure(sm2_public_key=...)``**：旧签名 ``Sm2Cipher.decrypt(private_key,
-ciphertext)`` 不带公钥，而底层 GmSSL 构造私钥时**必须**同时提供公钥（PKCS#8 解析要求公钥
-字段存在，且没有「由标量派生公钥」的接口——已实测）。``encrypt`` / ``verify`` 自带公钥参数，
-不受影响；``sign`` 旧签名本来就同时传公私钥。
+``configure(sm2_public_key=...)`` 是**可选**的：旧签名 ``Sm2Cipher.decrypt(private_key,
+ciphertext)`` 不带公钥，库会在缺公钥时自行派生 ``d·G``。显式注入的好处是省掉那次 EC 乘法，
+并让 GmSSL 校验注入的公钥与私钥是否匹配（传错会直接报错）。
 """
 
 from __future__ import annotations
@@ -71,12 +70,7 @@ class Sm2Cipher:
 
     @staticmethod
     def decrypt(private_key: str, ciphertext: bytes) -> bytes:
-        """解密；需要先 ``configure(sm2_public_key=...)``（见模块文档）。"""
-        if _sm2_public_key is None:
-            raise ValueError(
-                "Sm2Cipher.decrypt 需要公钥：请先调用 "
-                "compat.configure(sm2_public_key=settings.SM2_PUBLIC_KEY)"
-            )
+        """解密；只给私钥即可（未 ``configure`` 时由库派生 ``d·G``，见模块文档）。"""
         return _key_handle(private_key, _sm2_public_key).decrypt(ciphertext)
 
     @staticmethod

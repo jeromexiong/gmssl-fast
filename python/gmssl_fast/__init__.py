@@ -162,9 +162,10 @@ class SM2:
 
     公钥接受 128（``X‖Y``）与 130（``04‖X‖Y``）字符两种输入。
 
-    ⚠️ **私钥操作（``decrypt`` / ``sign``）必须同时提供公钥**：GmSSL 的 PKCS#8 解析
-    要求公钥字段存在，且未暴露「由标量派生公钥」的接口（已实测）。这也与既有调用
-    形态一致（``sign(private_key, public_key, data)``）。
+    ⚠️ **只给私钥也能解密/签名**：GmSSL 的 PKCS#8 解析要求公钥字段存在（实测缺字段会
+    ``DER decoding failed``），库会在未给公钥时用 GmSSL 的 ``sm2_point_mul_generator``
+    自行派生 ``d·G``（一次 EC 乘法，句柄缓存后只算一次）。显式给出公钥可省掉这次派生，
+    且 GmSSL 会校验它与标量是否匹配——**传错会直接报错，不会静默算错**。
 
     ⚠️ 加密明文上限 **255 字节**（GmSSL 限制），不要用它加密长数据。
     """
@@ -185,10 +186,6 @@ class SM2:
             else:
                 raise ValueError("SM2 公钥必须是 128 或 130 个十六进制字符")
             _validate_hex(body, 128, "SM2 公钥")
-        if private_key is not None and public_key is None:
-            raise ValueError(
-                "SM2 私钥操作需要同时提供公钥（GmSSL 的 PKCS#8 解析要求公钥字段，已实测）"
-            )
         self._private_key = private_key
         self._public_key = public_key
         self._handle: _core.Sm2KeyHandle | None = None
@@ -215,12 +212,12 @@ class SM2:
 
     @property
     def public_key_hex(self) -> str | None:
-        """130 字符（含 04 前缀）。"""
+        """130 字符（含 04 前缀）；未显式给出时为 ``None``（派生出的公钥不对外暴露）。"""
         return self._public_key
 
     def encrypt(self, data: bytes) -> bytes:
         """加密，返回裸 C1C3C2；明文上限 255 字节。"""
-        if self._public_key is None:
+        if self._public_key is None and self._private_key is None:
             raise ValueError("SM2 加密需要公钥")
         return self._key().encrypt(data)
 
@@ -238,6 +235,6 @@ class SM2:
 
     def verify(self, data: bytes, signature: bytes) -> bool:
         """校验裸 r‖s 签名。"""
-        if self._public_key is None:
+        if self._public_key is None and self._private_key is None:
             raise ValueError("SM2 验签需要公钥")
         return self._key().verify(data, signature)

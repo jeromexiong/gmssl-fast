@@ -6,6 +6,10 @@
 //! 的接口（`gmssl-rs-sys` 未包含 `sm2_private_key_from_der` 等），所以由本层按 GmSSL
 //! 的 DER 模板构造（模板见测试 `dump_der_templates`）。
 //!
+//! **只给私钥时**：GmSSL 的 PKCS#8 解析要求 `[1]` 公钥字段存在（实测缺字段会
+//! `DER decoding failed`），所以本层先用 GmSSL 的 `sm2_point_mul_generator` 算出
+//! `d·G`（见 [`point_from_scalar`]）再构造 DER —— 调用方因此可以只提供私钥。
+//!
 //! **本模块的纯 Rust 核心函数不依赖 pyo3**（只有下面的 `#[pyfunction]` 是薄包装），
 //! 因此 `cargo test` 可以直接验证算法与 DER 逻辑，无需 Python 解释器。
 
@@ -71,6 +75,47 @@ pub(crate) fn parse_point(hex: &str) -> Result<[u8; POINT_BYTES], GmsslError> {
     Ok(point)
 }
 
+/// GmSSL 的 `SM2_POINT`（`sm2.h`）：`typedef struct { uint8_t x[32]; uint8_t y[32]; }`。
+///
+/// 只当不透明缓冲区传给 C（从不读字段），尺寸与头文件一致（64 字节）。
+#[repr(C)]
+struct Sm2Point {
+    x: [u8; 32],
+    y: [u8; 32],
+}
+
+// GmSSL 的 EC 原语（实现在 `sm2_alg.c`，随静态库链接进来；`gmssl-rs` 未暴露它们）。
+// 「由标量派生公钥」是「只给私钥」时构造 PKCS#8 的必要步骤，故在此直接声明。
+// 两个函数都不依赖一次性初始化（`sm2_point_mul_generator` 内部自行准备）。
+extern "C" {
+    fn sm2_point_mul_generator(r: *mut Sm2Point, k: *const u8) -> std::ffi::c_int;
+    fn sm2_point_to_uncompressed_octets(p: *const Sm2Point, out: *mut u8);
+}
+
+/// 由私钥标量派生公钥点（`d·G`），返回 `04‖X‖Y`（65 字节）。
+///
+/// 用于「只给了私钥」的场景：GmSSL 的 PKCS#8 解析要求公钥字段存在，而我们无法从
+/// `sm2_private_key_info_from_der` 得到省略字段时的派生行为（实测直接报错）。
+pub(crate) fn point_from_scalar(
+    scalar: &[u8; SCALAR_BYTES],
+) -> Result<[u8; POINT_BYTES], GmsslError> {
+    let mut point = Sm2Point {
+        x: [0; 32],
+        y: [0; 32],
+    };
+    let mut octets = [0u8; POINT_BYTES];
+    unsafe {
+        if sm2_point_mul_generator(&mut point, scalar.as_ptr()) != 1 {
+            return Err(invalid("SM2 私钥无效：无法由标量派生公钥"));
+        }
+        sm2_point_to_uncompressed_octets(&point, octets.as_mut_ptr());
+    }
+    if octets[0] != 0x04 {
+        return Err(invalid("SM2 私钥无效：派生出的公钥不是合法点"));
+    }
+    Ok(octets)
+}
+
 /// 由私钥标量构造密钥；`point` 为公钥点时会写入 PKCS#8 的 `[1]` 字段
 /// （GmSSL 会校验其与标量是否匹配）。
 pub(crate) fn scalar_key(
@@ -103,8 +148,12 @@ pub(crate) fn generate() -> Result<(String, String), GmsslError> {
 
 fn private_key(private_key_hex: &str, public_key_hex: Option<&str>) -> Result<Sm2Key, GmsslError> {
     let scalar = parse_scalar(private_key_hex)?;
-    let point = public_key_hex.map(parse_point).transpose()?;
-    scalar_key(&scalar, point.as_ref())
+    // 未给公钥时由标量派生（GmSSL 要求 PKCS#8 里必须有公钥字段）。
+    let point = match public_key_hex {
+        Some(hex) => parse_point(hex)?,
+        None => point_from_scalar(&scalar)?,
+    };
+    scalar_key(&scalar, Some(&point))
 }
 
 /// 加密，返回**裸 C1C3C2**；明文上限 255 字节。
@@ -261,15 +310,24 @@ impl Sm2KeyHandle {
             .map(parse_point)
             .transpose()
             .map_err(to_py_err)?;
-        let key = match (&scalar, &point) {
-            (Some(scalar), _) => scalar_key(scalar, point.as_ref()).map_err(to_py_err)?,
-            (None, Some(point)) => point_key(point).map_err(to_py_err)?,
-            (None, None) => return Err(GmsslValueError::new_err("SM2 密钥句柄至少需要私钥或公钥")),
+        let has_private = scalar.is_some();
+        let key = match scalar {
+            Some(scalar) => {
+                // 只给私钥时由标量派生（GmSSL 的 PKCS#8 解析要求 `[1]` 公钥字段存在）。
+                let point = match point {
+                    Some(point) => point,
+                    None => point_from_scalar(&scalar).map_err(to_py_err)?,
+                };
+                scalar_key(&scalar, Some(&point)).map_err(to_py_err)?
+            }
+            None => match point {
+                Some(point) => point_key(&point).map_err(to_py_err)?,
+                None => {
+                    return Err(GmsslValueError::new_err("SM2 密钥句柄至少需要私钥或公钥"));
+                }
+            },
         };
-        Ok(Self {
-            key,
-            has_private: scalar.is_some(),
-        })
+        Ok(Self { key, has_private })
     }
 
     /// 加密，返回裸 C1C3C2（只需公钥）。
@@ -333,8 +391,8 @@ b3996ca6e16bc109c3e43a1133a2c16485f4f67dd0d8dded6b837f4e9dca2ea21";
 
     #[test]
     fn without_public_key_field_is_rejected_by_gmssl() {
-        // 实测：GmSSL 的 PKCS#8 解析**要求** [1] 公钥字段存在（否则 DER decoding failed），
-        // 且没有暴露「由标量派生公钥」的接口。因此 Python 侧的私钥操作必须同时给出公钥。
+        // 实测：GmSSL 的 PKCS#8 解析**要求** [1] 公钥字段存在（否则 DER decoding failed）。
+        // 这正是本层需要在缺公钥时先派生 `d·G`（见 `derives_public_key_from_scalar`）的原因。
         let err = scalar_key(&golden_scalar(), None)
             .expect_err("GmSSL 竟然接受了不带公钥的 PKCS#8，请更新本测试与 Python 侧校验");
         let message = format!("{err}");
@@ -342,6 +400,28 @@ b3996ca6e16bc109c3e43a1133a2c16485f4f67dd0d8dded6b837f4e9dca2ea21";
             message.contains("DER decoding failed"),
             "实际错误：{message}"
         );
+    }
+
+    #[test]
+    fn derives_public_key_from_scalar() {
+        // d·G 必须与 golden 密钥对的公钥逐字节一致（决定「只给私钥」的正确性）。
+        let point = point_from_scalar(&golden_scalar()).unwrap();
+        assert_eq!(to_hex(&point), GOLDEN_POINT);
+    }
+
+    #[test]
+    fn private_key_only_can_encrypt_decrypt_and_sign() {
+        // 只给私钥：派生公钥 → 自洽的密钥 → 加解密与签名验签全通。
+        let key = private_key(GOLDEN_SCALAR, None).unwrap();
+        assert_eq!(to_hex(&key_point(&key).unwrap()), GOLDEN_POINT);
+
+        let message = b"private-key-only";
+        let der = gmssl_rs::sm2::sm2_encrypt(&key, message).unwrap();
+        let raw = sm2_fmt::ct_der_to_raw(&der).unwrap();
+        assert_eq!(decrypt_with_key(&key, &raw).unwrap(), message);
+
+        let signature = sign_with_key(&key, message).unwrap();
+        assert!(verify_with_key(&key, message, &signature).unwrap());
     }
 
     #[test]

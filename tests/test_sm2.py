@@ -161,12 +161,28 @@ def test_rejects_bad_key_length() -> None:
         gmssl_fast.SM2(public_key="zz" * 64)  # 非十六进制
 
 
-def test_private_key_requires_public_key() -> None:
-    # GmSSL 的 PKCS#8 解析要求公钥字段，且无「由标量派生公钥」接口（已实测）
-    with pytest.raises(ValueError):
-        gmssl_fast.SM2(private_key=GOLDEN_SM2_PRIV)
+def test_private_key_only_derives_public_key() -> None:
+    """只给私钥时由 d·G 派生公钥（GmSSL 的 PKCS#8 解析要求公钥字段，缺字段会直接报错）。"""
+    sm2 = gmssl_fast.SM2(private_key=GOLDEN_SM2_PRIV)
+
+    # 派生结果必须就是 golden 公钥：存量密文的两种前缀形态与存量签名都要能过
+    assert sm2.decrypt(GOLDEN_SM2_CT).decode() == GOLDEN_SM2_MSG
+    assert sm2.decrypt(b"\x04" + GOLDEN_SM2_CT).decode() == GOLDEN_SM2_MSG
+    assert sm2.decrypt(GOLDEN_SM2_CT_LEADING_04).decode() == GOLDEN_SM2_MSG
+    assert sm2.verify(GOLDEN_SM2_MSG.encode(), GOLDEN_SM2_SIG) is True
 
 
-def test_encrypt_requires_public_key() -> None:
-    with pytest.raises(ValueError):
-        gmssl_fast.SM2(private_key=GOLDEN_SM2_PRIV).encrypt(b"x")
+def test_private_key_only_can_encrypt_and_sign() -> None:
+    """只给私钥也能加密/签名（内部是同一把密钥，派生出的公钥参与运算）。"""
+    sm2 = gmssl_fast.SM2(private_key=GOLDEN_SM2_PRIV)
+    assert sm2.decrypt(sm2.encrypt(b"only-private")) == b"only-private"
+    assert sm2.verify(b"only-private", sm2.sign(b"only-private")) is True
+
+
+def test_explicit_public_key_must_match_private_key() -> None:
+    """显式给错公钥必须报错（GmSSL 会校验 [1] 字段与标量匹配），而不是静默算错。"""
+    other = gmssl_fast.SM2.generate()
+    with pytest.raises(Exception):
+        gmssl_fast.SM2(
+            private_key=GOLDEN_SM2_PRIV, public_key=other.public_key_hex
+        ).sign(b"x")
