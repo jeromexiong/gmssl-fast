@@ -63,7 +63,7 @@ jobs:
       - name: Python 测试
         run: pytest -q
 
-  # ------------------------------------------------------------ 4 平台 abi3 wheel
+  # ------------------------------------------------------------ 多平台 abi3 wheel
   wheels:
     name: wheel / ${{ matrix.target }}
     needs: test
@@ -106,6 +106,12 @@ jobs:
             os: macos-15-intel # 唯一还在售的 Intel macOS runner
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          # Windows ARM64（Snapdragon 笔记本 / Surface Pro X）：`windows-11-arm` 是 GitHub 托管的
+          # **原生** ARM64 runner（公私有仓库都有），不需要 qemu，因此除了构建还能就地做
+          # 「装真轮子 + 跑 pytest」——正是 x64 腿因为 /FORCE:UNRESOLVED 必须补的那类运行期证据。
+          # Python 侧：CPython ≥ 3.11 有官方 win-arm64 构建，轮子平台标签 win_arm64，PyPI/pip 都认。
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -135,9 +141,10 @@ jobs:
           ls dist/*manylinux*.whl
 
       - name: Windows 冒烟 + 全量测试
-        # Windows 上用了 /FORCE:UNRESOLVED 放宽链接（原因：crates.io 的 gmssl-rs 0.1.1
-        # 声明了两个 GmSSL 3.2.0 才有的符号，详见 build.rs）—— 代价是「真缺符号」不再在
+        # Windows（x64 与 ARM64）上用了 /FORCE:UNRESOLVED 放宽链接（原因：crates.io 的 gmssl-rs
+        # 0.1.1 声明了两个 GmSSL 3.2.0 才有的符号，详见 build.rs）—— 代价是「真缺符号」不再在
         # 链接期报错，所以必须由**运行期证据**兜底：装真轮子、跑完整 pytest。
+        # 两条 Windows 腿跑的都是 native 进程，不存在「交叉编译没验证」的问题。
         # snowland-smx 装不上也不影响（对拍用例会 importorskip 自动跳过）。
         #
         # ⚠️ shell 必须是 bash：Windows runner 默认是 pwsh，它不展开 `dist/*.whl`，

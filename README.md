@@ -20,10 +20,12 @@ pip install gmssl-fast          # abi3 wheel，Python ≥ 3.8
 已实测产出 wheel 的平台（CI，共 5 个）：**Linux x86_64（manylinux）、Linux x86_64（musl）、
 macOS arm64、macOS x86_64、Windows x86_64（MSVC）**。
 
-⚠️ **Linux aarch64（ARM 服务器）暂未提供**：试过一腿，但失败原因是 CI 侧没有 binfmt/qemu
-（在 x86_64 runner 上构建 aarch64 需要它），**不是 GmSSL 编译问题**；两种修法已写在
-`.github/workflows/build.yml` 的注释里，落地后即可补上。在此之前 ARM 服务器需源码安装
-（需 Rust + CMake）。
+⚠️ **Linux aarch64（ARM 服务器）目前未随 CI 出货，但已证明可构建**：CI 那一腿失败的原因是
+x86_64 runner 缺 binfmt/qemu（**不是 GmSSL 编译问题**）。本机用 podman 起原生 aarch64 容器
+（`quay.io/pypa/manylinux_2_28_aarch64`）实测通过：产出 `manylinux_2_28_aarch64` wheel，
+装真轮子后 pytest **41 passed / 1 skipped**、SM3 结果正确 ⇒ ARM 服务器**源码安装可行**
+（Rust + CMake），补 wheel 只需在 CI 加一步 `docker/setup-qemu-action@v3`（或在原生 ARM
+runner 上构建）。修法见 `.github/workflows/build.yml` 注释。
 
 ### Windows 是怎么拿下的
 
