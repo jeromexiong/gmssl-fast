@@ -1,7 +1,12 @@
 """SM3 公开 API 测试。
 
 标准向量来源：GM/T 0004-2012 附录 A（SM3("abc")）。
+
+⚠️ 本目录的断言规则：**不得依赖概率**。随机性（盐 / IV / 临时密钥）用
+`monkeypatch` 注入固定值来断言，而不是「跑两次看它不一样」（那是概率断言）。
 """
+
+import pytest
 
 import gmssl_fast
 
@@ -36,11 +41,33 @@ def test_password_verify_accepts_golden_stored_value() -> None:
     assert gmssl_fast.sm3_password_verify("admin123", "no-dollar-sign") is False
 
 
-def test_password_hash_roundtrip_and_random_salt() -> None:
+def test_password_hash_roundtrip() -> None:
     stored = gmssl_fast.sm3_password_hash("admin123")
     assert gmssl_fast.sm3_password_verify("admin123", stored) is True
     assert gmssl_fast.sm3_password_verify("admin1", stored) is False
-    assert stored.split("$")[0] != gmssl_fast.sm3_password_hash("admin123").split("$")[0]
+
+
+def test_password_hash_salt_comes_from_secrets_token_hex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """盐必须来自 `secrets.token_hex(16)`。
+
+    注意断言方式：**注入**随机源再断言它被按约定调用，而不是「两次取到不同盐」
+    （后者是概率断言：碰撞概率 2⁻¹²⁸，虽极小但不可证明）。
+    """
+    injected = "ab" * 16
+    calls: list[int] = []
+
+    def fake_token_hex(n: int) -> str:
+        calls.append(n)
+        return injected
+
+    monkeypatch.setattr(gmssl_fast.secrets, "token_hex", fake_token_hex)
+    stored = gmssl_fast.sm3_password_hash("admin123")
+
+    assert calls == [16]  # 恰好调用一次、16 字节
+    assert stored == f"{injected}${gmssl_fast.sm3_hex(('admin123' + injected).encode())}"
+    assert gmssl_fast.sm3_password_verify("admin123", stored) is True
 
 
 def test_sm3_hmac() -> None:

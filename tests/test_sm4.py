@@ -31,9 +31,20 @@ def test_cbc_with_zero_iv_first_block_equals_block_vector() -> None:
 def test_cbc_roundtrip_and_iv_prefix() -> None:
     assert len(PLAINTEXT) == 12  # "hello " + 2 个汉字(3 字节各)
     blob = gmssl_fast.SM4(KEY).encrypt(PLAINTEXT)
-    assert len(blob) == 16 + 16  # 16B IV + 一个 16B 填充块
-    assert blob[:16] != bytes(16)
+    assert len(blob) == 16 + 16  # 16B IV + 一个 16B 填充块（IV 通过长度/前缀位置验证）
     assert gmssl_fast.SM4(KEY).decrypt(blob) == PLAINTEXT
+
+
+def test_encrypt_without_iv_uses_secrets_token_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """不传 IV 时必须取 `secrets.token_bytes(16)`。
+
+    **注入**随机源再断言，而不是「断言 IV 不是全零」（那是概率断言：2⁻¹²⁸）。
+    """
+    injected = b"\x5a" * 16
+    monkeypatch.setattr(gmssl_fast.secrets, "token_bytes", lambda n: injected[:n])
+    assert gmssl_fast.SM4(KEY).encrypt(PLAINTEXT)[:16] == injected
 
 
 def test_ctr_roundtrip_and_no_padding() -> None:

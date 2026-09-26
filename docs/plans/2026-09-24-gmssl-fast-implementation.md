@@ -822,6 +822,27 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 - ⚠️ **`v0.1.0` tag 已删除**：`publish` job 需要 `TEST_PYPI_API_TOKEN`，未配置时 tag 跑必然红；
   配好 secret 再打即可（`git tag v0.1.0 && git push origin v0.1.0`）。
 
+### 收尾之后的两次追加（都是 CI/实测驱动）
+
+1. **CI 抓到真 bug：4 处概率性断言**（`assert raw[0] != 0x30` 加在**随机**生成的密文/签名上）。
+   裸格式 x 坐标首字节本身就是 `0x30` 的概率 ≈ 1/256（8000 次采样实测 0.537%/0.375%）
+   → 一轮 CI 约 0.8%~1.2% 概率假失败，本地几次全凭运气过。
+   已全部改成**确定性的长度判据**（裸 C1C3C2 = 96+n、裸 r‖s = 64，DER 至少多 10 字节），
+   「首字节非 0x30」的契约改由**固定 golden 向量**锁住。
+2. **SM2 签名优化（设计 §10 登记项，已完成）**：每次调用重建 PKCS#8 私钥（GmSSL 解析时会
+   校验 `[1]` 公钥字段与标量匹配 = 一次额外 EC 乘法）→ 新增 `#[pyclass] Sm2KeyHandle`
+   持有已解析密钥，`SM2` 实例缓存一个、`compat` 用 `lru_cache(maxsize=8)` 按密钥缓存。
+   **实测 1395 → 2528 ops/s（追平 C 层基线 2538）**；新增 3 条契约测试锁住语义等价。
+3. **「断言不得依赖概率」立为硬规则 + 机械防线**（用户要求「完全杜绝 1/256 这类事件」）：
+   除了上面那 4 处，又把剩下两处 2⁻¹²⁸ 级断言改成**注入随机源**的确定性断言
+   （`test_password_hash_salt_comes_from_secrets_token_hex`、
+   `test_encrypt_without_iv_uses_secrets_token_bytes`）；
+   新增 `scripts/lint_test_asserts.py`（R1 字节断言必须引用 `GOLDEN_*`；
+   R2 禁止两个随机产生式互相比较；Rust 侧只看测试模块内调 GmSSL 随机运算的文件）
+   并接入 CI。防线本身也验证过：现行代码 0 假阳性、坏样本 3 条全抓。
+   另核实：**库侧没有 1/256 级失败路径**——GmSSL 自己就重选 k / 重试 KDF
+   （`sm2_lib.c:511`、`:529`）。
+
 ### 与计划的偏差（均已记录理由）
 
 1. **`cargo test` 需要 pyo3-free 核心**：否则测试要链接 libpython（计划未预见，实测必须改）。

@@ -143,7 +143,14 @@ pytest -q                            # 含 4 条存量 golden 与双向对拍
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+python scripts/lint_test_asserts.py  # 断言不得依赖概率（CI 也在跑）
 ```
+
+- **测试断言规则（硬规则）**：随机性（盐 / IV / 临时密钥）只能 **注入**（`monkeypatch`）
+  后断言，字节级契约只对**固定向量**（`GOLDEN_*`）断言。因此禁止
+  「两次随机值不相等」「随机密文的首字节不是 0x30」这类**概率断言**——
+  它们会让 CI 的红变得随机（这个坑真踩过：1/256 级，详见设计文档 §7）。
+  `scripts/lint_test_asserts.py` 会机械检查，测试里不允许出现。
 
 - 测试分两层：Rust 单测（格式编解码，不需要 Python）与 Python 测试（API、安全门、对拍）。
 - `tests/golden.py` 是冻结的存量数据（密文/签名/密码哈希/SM4 块），**任何实现改动都必须让它继续通过**。

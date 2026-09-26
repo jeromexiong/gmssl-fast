@@ -41,6 +41,11 @@ jobs:
       - name: 格式
         run: cargo fmt --all -- --check
 
+      - name: 断言不得依赖概率（机械检查）
+        # 历史事故：assert_ne!(raw[0], 0x30) 打在随机密文上 —— 该字节本身就有约 1/256
+        # 概率等于 0x30（8000 次采样实测 0.537%），一轮 CI 约 1% 概率假失败。
+        run: python scripts/lint_test_asserts.py
+
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
 
