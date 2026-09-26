@@ -13,7 +13,7 @@
 | 算法范围 | SM2 + SM3 + SM4（CBC / CTR / GCM / **ECB**）；不暴露 SM9 / ZUC / X.509 |
 | SM4-ECB | 上游无封装，用 `Sm4Key::encrypt_block` 自拼 + 自管 PKCS7（纯安全 Rust，无 unsafe） |
 | SM4-GCM | **只提供一次性 API**（上游未暴露流式），文档写明内存占用 |
-| wheel | **abi3-py38**，4 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64` / `win_amd64`（Windows 的构建方式见 §10） |
+| wheel | **abi3-py38**，5 个包：`manylinux_2_28_x86_64` / `musllinux_1_2_x86_64` / `macosx arm64` / `macosx x86_64` / `win_amd64`（Windows 的构建方式见 §10；ARM Linux 见 §6） |
 | 工具链 | pyo3 0.29.x（MSRV Rust 1.83）、maturin 1.15.x、CMake（构建前置） |
 | 包名 | `gmssl-fast`（PyPI 未占用，HTTP 404，发布前占名）；模块 `gmssl_fast` |
 | SM2 线格式 | **裸格式，且是唯一行为**（密文裸 C1C3C2、签名裸 r‖s），**不暴露任何格式参数**；DER 只是内部实现细节，见 §4.1 |
@@ -210,9 +210,12 @@ gm.sm3_password_verify("admin123", stored)   # -> bool；格式不合法直接 F
 
 1. **PR 流水**（`ubuntu-latest`）：`maturin develop --locked` → `pytest` →
    `cargo clippy -- -D warnings` → `cargo fmt --check`。正确性门禁不依赖全平台矩阵。
-2. **Release 流水**（`v*` tag）：**4 个 target** 各出 1 个 wheel
-   （`x86_64-unknown-linux-gnu` manylinux auto / `aarch64-apple-darwin` /
-   `x86_64-apple-darwin` / `x86_64-pc-windows-msvc`），每平台构建后上传 artifact，
+2. **Release 流水**（`v*` tag）：**5 个 target** 各出 1 个 wheel
+   （`x86_64-unknown-linux-gnu` manylinux auto / `x86_64-unknown-linux-musl` musllinux_1_2 /
+   `aarch64-apple-darwin` / `x86_64-apple-darwin` / `x86_64-pc-windows-msvc`），
+   每平台构建后上传 artifact；
+   `aarch64-unknown-linux-gnu` 试过一腿但失败——CI 侧缺 binfmt/qemu（非 GmSSL 编译问题，
+   run 36247530045），修法（`docker/setup-qemu-action@v3` 或原生 ARM runner）见 workflow 注释。
    最后**单独一个 job** 用 `pypa/gh-action-pypi-publish` 发布
    （不要在矩阵里各自 publish，会重复/竞争）。
    `workflow_dispatch` 也能跑整套矩阵（不发 PyPI）——不发版时验证平台构建用。
