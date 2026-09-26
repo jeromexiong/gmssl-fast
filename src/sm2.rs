@@ -149,21 +149,6 @@ pub(crate) fn generate() -> Result<(String, String), GmsslError> {
     Ok((to_hex(&scalar), to_hex(&key_point(&key)?)))
 }
 
-fn private_key(private_key_hex: &str, public_key_hex: Option<&str>) -> Result<Sm2Key, GmsslError> {
-    let scalar = parse_scalar(private_key_hex)?;
-    // 未给公钥时由标量派生（GmSSL 要求 PKCS#8 里必须有公钥字段）。
-    let point = match public_key_hex {
-        Some(hex) => parse_point(hex)?,
-        None => point_from_scalar(&scalar)?,
-    };
-    scalar_key(&scalar, Some(&point))
-}
-
-/// 加密，返回**裸 C1C3C2**；明文上限 255 字节。
-pub(crate) fn encrypt_raw(public_key_hex: &str, data: &[u8]) -> Result<Vec<u8>, GmsslError> {
-    encrypt_with_key(&point_key(&parse_point(public_key_hex)?)?, data)
-}
-
 /// 加密（已解析的密钥）——供句柄复用，省掉每次调用的 SPKI 解析。
 pub(crate) fn encrypt_with_key(key: &Sm2Key, data: &[u8]) -> Result<Vec<u8>, GmsslError> {
     // 在这里显式拦下超长明文：否则 GmSSL 只会报一句无从下手的 "sm2_encrypt"。
@@ -176,20 +161,7 @@ pub(crate) fn encrypt_with_key(key: &Sm2Key, data: &[u8]) -> Result<Vec<u8>, Gms
     sm2_fmt::ct_der_to_raw(&der)
 }
 
-/// 解密裸 C1C3C2。
-///
-/// **两候选试解**：先按原样解，失败再剥掉首字节重试（部分前端会在 C1 前加 `04`
-/// 非压缩前缀）。⚠️ 不做「首字节是 0x04 就剥离」的启发式——裸格式 x 坐标首字节
-/// 本身就可能等于 0x04（约 1/256），那样会让合法密文随机解密失败。
-pub(crate) fn decrypt_raw(
-    private_key_hex: &str,
-    public_key_hex: Option<&str>,
-    ciphertext: &[u8],
-) -> Result<Vec<u8>, GmsslError> {
-    decrypt_with_key(&private_key(private_key_hex, public_key_hex)?, ciphertext)
-}
-
-/// 解密（已解析的密钥）；两候选试解的逻辑与 [`decrypt_raw`] 完全一致。
+/// 解密（已解析的密钥）；两候选试解的逻辑见上。
 pub(crate) fn decrypt_with_key(key: &Sm2Key, ciphertext: &[u8]) -> Result<Vec<u8>, GmsslError> {
     let mut candidates: Vec<&[u8]> = vec![ciphertext];
     if ciphertext.first() == Some(&0x04) {
@@ -209,28 +181,10 @@ pub(crate) fn decrypt_with_key(key: &Sm2Key, ciphertext: &[u8]) -> Result<Vec<u8
     Err(last_error.unwrap_or_else(|| invalid("SM2 密文长度不足")))
 }
 
-/// 签名，返回**裸 r‖s**（64 字节）。
-pub(crate) fn sign_raw(
-    private_key_hex: &str,
-    public_key_hex: Option<&str>,
-    data: &[u8],
-) -> Result<Vec<u8>, GmsslError> {
-    sign_with_key(&private_key(private_key_hex, public_key_hex)?, data)
-}
-
 /// 签名（已解析的密钥）。
 pub(crate) fn sign_with_key(key: &Sm2Key, data: &[u8]) -> Result<Vec<u8>, GmsslError> {
     let der = Sm2Signer::sign(key, None, data)?;
     sm2_fmt::sig_der_to_raw(&der).map(|raw| raw.to_vec())
-}
-
-/// 校验裸 r‖s 签名。
-pub(crate) fn verify_raw(
-    public_key_hex: &str,
-    data: &[u8],
-    signature: &[u8],
-) -> Result<bool, GmsslError> {
-    verify_with_key(&point_key(&parse_point(public_key_hex)?)?, data, signature)
 }
 
 /// 校验裸 r‖s 签名（已解析的密钥）。
@@ -249,47 +203,6 @@ pub(crate) fn verify_with_key(
 #[pyfunction]
 pub fn sm2_generate() -> PyResult<(String, String)> {
     generate().map_err(to_py_err)
-}
-
-/// SM2 加密，返回裸 C1C3C2。
-#[pyfunction]
-pub fn sm2_encrypt_raw<'py>(
-    py: Python<'py>,
-    public_key_hex: &str,
-    data: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let raw = encrypt_raw(public_key_hex, data).map_err(to_py_err)?;
-    Ok(PyBytes::new(py, &raw))
-}
-
-/// SM2 解密裸 C1C3C2（两候选试解）。
-#[pyfunction]
-pub fn sm2_decrypt_raw<'py>(
-    py: Python<'py>,
-    private_key_hex: &str,
-    public_key_hex: Option<&str>,
-    ciphertext: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let plain = decrypt_raw(private_key_hex, public_key_hex, ciphertext).map_err(to_py_err)?;
-    Ok(PyBytes::new(py, &plain))
-}
-
-/// SM2 签名，返回裸 r‖s。
-#[pyfunction]
-pub fn sm2_sign_raw<'py>(
-    py: Python<'py>,
-    private_key_hex: &str,
-    public_key_hex: Option<&str>,
-    data: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let raw = sign_raw(private_key_hex, public_key_hex, data).map_err(to_py_err)?;
-    Ok(PyBytes::new(py, &raw))
-}
-
-/// 校验裸 r‖s 签名。
-#[pyfunction]
-pub fn sm2_verify_raw(public_key_hex: &str, data: &[u8], signature: &[u8]) -> PyResult<bool> {
-    verify_raw(public_key_hex, data, signature).map_err(to_py_err)
 }
 
 /// 已解析的 SM2 密钥句柄（**性能关键**）。
