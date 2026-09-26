@@ -89,15 +89,16 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             manylinux: auto
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            # ARM 云服务器已是主流，这个 wheel 直接决定「发版后能不能装」；
-            # manylinux 容器自带 aarch64 交叉工具链，GmSSL 的 CMake 由它编译。
-            manylinux: auto
+          # ⚠️ aarch64-unknown-linux-gnu 试过一腿但失败（run 36247530045 / job 108419496554）：
+          # maturin-action 在 x86_64 runner 上构建 aarch64 需要 binfmt/qemu 支持，本流水线
+          # 没注册，因此该腿在 **action 编排阶段** 就报错（Node 侧 ChildProcess 异常，
+          # 不是 GmSSL 编译失败）。两种修法（都还没试）：
+          #   ① 在构建前加 `docker/setup-qemu-action@v3`（标准做法，构建走模拟、慢一些）；
+          #   ② 换原生 ARM runner `ubuntu-24.04-arm`（免模拟，但私有仓库可能计费）。
+          # 目前 ARM 服务器用户需要自行源码编译（Rust + CMake，README 有说明）。
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            # Alpine / musl 容器场景（与 glibc 的 manylinux 不兼容）。先试一轮：
-            # musllinux 容器需能编译 GmSSL（CMake + musl 交叉工具链），失败就撤掉这一腿。
+            # Alpine / musl 容器场景：musllinux 容器能正常编译 GmSSL（本轮已实测通过 ✓）
             manylinux: musllinux_1_2
           - target: aarch64-apple-darwin
             os: macos-latest # arm64
