@@ -89,6 +89,16 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             manylinux: auto
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            # ARM 云服务器已是主流，这个 wheel 直接决定「发版后能不能装」；
+            # manylinux 容器自带 aarch64 交叉工具链，GmSSL 的 CMake 由它编译。
+            manylinux: auto
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            # Alpine / musl 容器场景（与 glibc 的 manylinux 不兼容）。先试一轮：
+            # musllinux 容器需能编译 GmSSL（CMake + musl 交叉工具链），失败就撤掉这一腿。
+            manylinux: musllinux_1_2
           - target: aarch64-apple-darwin
             os: macos-latest # arm64
           - target: x86_64-apple-darwin
