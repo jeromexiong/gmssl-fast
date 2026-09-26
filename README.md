@@ -103,12 +103,14 @@ Sm4Cipher = compat.Sm4Cipher
 
 > `Sm2Cipher.decrypt(private_key, ciphertext)` 的旧签名不带公钥，而 GmSSL 的 PKCS#8 解析
 > **必须**同时提供公钥（未暴露「由标量派生公钥」的接口，已实测），因此需要先用
-> `compat.configure(sm2_public_key=...)` 注入。`encrypt` / `verify` / `sign` 不受影响。
+> `compat.configure(sm2_public_key=...)` 注入（**可选**：不注入时库会用私钥自行派生公钥，
+> 注入只是省掉那次 EC 乘法）。`encrypt` / `verify` / `sign` 不受影响。
 
 ## 已知行为（务必读）
 
-1. **SM2 加密明文上限 255 字节**（GmSSL 限制）。长数据请用 SM4 对称加密，或用 SM2 加密一个
-   对称密钥（信封模式）。
+1. **SM2 加密明文上限 255 字节**：这是 **GmSSL API 的限制**（它的 `SM2_CIPHERTEXT` 用固定
+   缓冲 `uint8_t ciphertext[255]`），**不是裸 C1C3C2 格式的限制** —— 纯 Python 实现（如
+   `pysmx`）不受此限。长数据请用 SM4 对称加密，或用 SM2 加密一个对称密钥（信封模式）。
 2. **CBC 不提供完整性保护**：用错 IV / 错密钥时不会报错，只会解出垃圾明文。需要完整性请用
    `SM4GCM`（错误时抛 `GmsslAuthError`）。
 3. **校验失败会往 stderr 打 `文件:行号:函数():` 前缀的调试输出**：GmSSL 的 `DEBUG` 宏被

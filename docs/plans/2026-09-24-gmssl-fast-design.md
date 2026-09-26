@@ -426,3 +426,36 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
 
 ⚠️ 迁移**不得改动**：前端（`sm-crypto` / `gm_crypto`）、数据库已有数据、`salt$hash` 格式、
 SM4 的 `iv‖ct` 布局。
+
+### 执行状态（2026-09-26，阶段 2 完成）
+
+**改动**：`sm_crypto.py` 479 → **119 行**（净删 424 行），成为「契约保留 + 委托库」的胶水；
+`sm_crypto_util.py` / `PwdUtil` / `Sm4CbcTypeHandler` **零改动**（shim 保持了原类名与静态方法
+签名，调用方无需动）。算法、ZA/摘要推导、格式转换、PKCS7、IV 拼接、KDF 退化重试全部移入库。
+
+⚠️ **对上面「退化成 5 行 re-export」的修正**：实测不行 —— 契约测试用**模块级打桩点**
+`sm_crypto._sm2_encrypt` 确定性地验证 KDF 全零重试，还直接断言 `Sm2Cipher._strip_04` 的语义。
+因此 shim 必须保留 `_sm2_encrypt`（模块级函数）、`_strip_04`、`generate_key_pair`、
+`get_config_key`（读 `settings` 而非环境变量）这几个接缝。
+
+**验收结果（用 fastapiadmin 自己的 `.venv` 与 `.env` 真实密钥）**：
+
+1. ✅ `tests/core/test_sm_crypto.py` **44 passed**（golden 密文/签名/`salt$hash` 全部沿用旧向量）；
+2. ✅ 反向对拍：库产出 → `pysmx` 能解/验；`pysmx` 产出 → 库能解（本仓库
+   `tests/test_cross_fastapiadmin.py` 做常态化双向对拍）；
+3. ⚠️ 三端登录：**未在真机联调**（本机 Redis 未启动，登录链路需要 Redis/MySQL）。已用
+   「前端等价实现（`pysmx`）加密 → `CommonCryptogramUtil.do_sm2_decrypt` 解出原文」覆盖登录
+   关键路径，并验证反向、签名/验签、`Sm4CbcTypeHandler` 字段往返、存量哈希；
+4. ✅ 存量数据不动：golden 密文/签名/密码哈希均可解可验（同 1）。
+
+全量 `pytest`：**307 passed, 1 failed**（`redis Connection refused`，环境问题，与本改动无关）；
+门禁 `ruff check .` / `ruff format --check` / `pyright` 干净；最终产物（CI 的 arm64 轮子）复测同样通过。
+
+**唯一能力差异（已写成用例并注明原因）**：SM2 明文上限 **255 字节**（GmSSL 的
+`SM2_CIPHERTEXT` 固定缓冲；`pysmx` 不受限）。生产路径不受影响（SM2 只用于登录口令等短数据，
+长字段走 SM4）。若将来确实需要 SM2 加密长数据，需在库内用 GmSSL 的点乘/KDF/SM3 原语自行拼装。
+
+**为接入而补的库能力**：`d·G` 派生公钥（`point_from_scalar`，直接声明 GmSSL 的
+`sm2_point_mul_generator` / `sm2_point_to_uncompressed_octets`）—— 旧调用形态
+`Sm2Cipher.decrypt(priv, ct)` 不带公钥，而 GmSSL 的 PKCS#8 解析要求公钥字段存在；
+`compat.configure` 因此从「必需」变为「可选」。
