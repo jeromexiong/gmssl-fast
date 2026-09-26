@@ -34,7 +34,7 @@ jobs:
           python --version
 
       - name: 安装构建与测试依赖
-        # snowland-smx 是「旧库」：tests/test_cross_fastapiadmin.py 用它做双向对拍，
+        # snowland-smx 是「旧库」：tests/test_cross_legacy.py 用它做双向对拍，
         # 缺了该文件会整体 skip —— CI 里要真的跑，所以必须装。
         run: pip install -U maturin pytest snowland-smx
 
@@ -153,6 +153,8 @@ jobs:
           echo "✅ 标签合规"
 
       - name: 运行期验证（装真轮子 + 跑完整测试）
+        # 只跑非 musl 腿：musllinux 轮子没法装在 glibc runner 上（见下面 musl 专用步骤）。
+        if: matrix.manylinux != 'musllinux_1_2'
         # 为什么每条腿都要做：Windows 两条腿用了 /FORCE:UNRESOLVED 放宽链接（crates.io 的
         # gmssl-rs 0.1.1 声明了两个 GmSSL 3.2.0 才有的符号，详见 build.rs）—— 代价是「真缺符号」
         # 不再在链接期报错 → 必须由**运行期证据**兜底。其余腿顺带做同一件事，证明
@@ -170,6 +172,19 @@ jobs:
           python -m pip install --force-reinstall --no-deps dist/*.whl
           python -c "import gmssl_fast; assert gmssl_fast.sm3_hex(b'abc').startswith('66c7f0f4')"
           pytest tests -q
+
+      - name: 运行期验证（musl 腿：在 musl 容器里装真轮子 + 跑测试）
+        # musllinux 轮子装到 glibc runner 上会被 pip 直接拒：
+        #   `... is not a supported wheel on this platform`
+        # —— 不是坏轮子，是平台标签不匹配（上一轮两条 musl 腿就栽在这里：轮子建出来了、
+        # 标签也合规，是验证步骤搭错了地方）。要拿运行期证据只能在 musl 容器里验，
+        # 容器用构建时同一个镜像（runner 是原生架构，所以 uname -m 直接对得上镜像后缀）。
+        if: matrix.manylinux == 'musllinux_1_2'
+        shell: bash
+        run: |
+          IMG="quay.io/pypa/musllinux_1_2_$(uname -m)"
+          echo "容器: $IMG"
+          docker run --rm -v "$PWD":/w -w /w "$IMG" bash -c 'PY=$(ls -d /opt/python/cp312-cp312/bin/python || ls -d /opt/python/*/bin/python | tail -1); echo "python: $PY"; $PY -m pip install -q pytest; $PY -m pip install -q --force-reinstall --no-deps dist/*.whl; $PY -m pytest tests -q'
 
       - uses: actions/upload-artifact@v4
         with:
