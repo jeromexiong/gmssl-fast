@@ -890,7 +890,17 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 （`gmssl/` + `gmssl-sys/`，前者对后者是 **path 依赖**）⇒ 本项目 `[patch.crates-io]` 从两条
 变成**一条**，`Cargo.lock` 里两个 crate 同源同一 rev（已核对）。内容仍是「提交 1 = crates.io
 原始源码、提交 2 = 只动那两个文件的补丁、提交 3 = 文档」，GmSSL 仍 3.1.1。
-旧的 `gmssl-rs-sys-patched` 被本仓库取代（保留备查，可删）。
+旧的 `gmssl-rs-sys-patched` 被本仓库取代，并已核验**零独有内容**后删除（2026-09-26）：
+
+- 旧仓库是**单 crate 布局**（根目录即 `gmssl-sys`），故其补丁只落在根 `build.rs` / `src/lib.rs`
+  —— 二者与新仓库 `gmssl-sys/build.rs`（332 行）/ `gmssl-sys/src/lib.rs`（1038 行）**逐字节相同**
+  （`gh api` 取 blob 后 `diff`，零差异）；
+- 源码：旧仓库 `GmSSL/` 下 **329** 个文件 ↔ 新仓库 `gmssl-sys/GmSSL/` 下 **329** 个文件，
+  **双向差集均为 0**（只有路径前缀不同）；
+- 旧仓库剩下的 10 个根文件是 crates.io 打包残留（`.cargo-ok` / `.cargo_vcs_info.json` /
+  `Cargo.lock` / `Cargo.toml.orig`）与 `README`/`LICENSE` 之类，无独有信息；
+- 删除前本项目已只依赖 `gmssl-rs-patched`（`Cargo.toml` 一条 `[patch.crates-io]`、
+  `Cargo.lock` 两个 crate 同源同一 rev），旧仓库不在构建路径上。
 
 ⚠️ 评估过但**没做**的两条路：把上游 main 整个 fork 过来直接依赖（= 连带换 GmSSL 3.2.0 +
 构建期下载，且 3.2.0 未开加速时 SM2 签名慢 5.7 倍，属设计 §9 的 R3 范畴，应作为独立决策）；

@@ -82,9 +82,9 @@ jobs:
         # 上游 GmSSL/gmssl-rs@main 已修好这两点（cflag("-DWIN32") + 打补丁 CMakeLists +
         # find_lib_dir），但**没有发版**：crates.io 上仍是修复前的 0.1.0。
         # 因此通过 Cargo.toml 的 [patch.crates-io] 钉住一份回移了该修复的 0.1.0 副本：
-        #   https://github.com/jeromexiong/gmssl-rs-sys-patched
-        # 它只有 build.rs 与 crates.io 字节不同，GmSSL 仍是 3.1.1 且源码随 crate 一起分发
-        # （构建不需要下载 GmSSL、不需要 submodule）；rev 由 Cargo.lock + --locked 钉死。
+        #   https://github.com/jeromexiong/gmssl-rs-patched
+        # 它与 crates.io 只有 build.rs / pem_helpers.rs 两个文件不同，GmSSL 仍是 3.1.1 且源码随
+        # crate 一起分发（构建不需要下载 GmSSL、不需要 submodule）；rev 由 Cargo.lock + --locked 钉死。
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
