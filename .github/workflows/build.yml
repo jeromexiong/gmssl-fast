@@ -199,7 +199,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write # 供 Trusted Publishing 使用（配置后可删掉下面的 password）
+      id-token: write # Trusted Publishing（OIDC）：不需要任何 secret
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -213,7 +213,9 @@ jobs:
       - name: 发布
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # 首次先发 TestPyPI 验证（需要 secrets.TEST_PYPI_API_TOKEN）；
-          # 确认无误后删掉 repository-url，并换成 secrets.PYPI_API_TOKEN 或 Trusted Publishing。
+          # 走 Trusted Publishing（OIDC），所以**不传 password**（本仓库没有任何 secret）。
+          # 前提是在目标站配好 pending publisher，四项都要对上：
+          #   TestPyPI（当前）：项目 gmssl-fast / 仓库 jeromexiong/gmssl-fast /
+          #                    workflow build.yml / environment pypi
+          # 发正式 PyPI 时：在 pypi.org 配同样的 pending publisher，然后删掉下面这行。
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
