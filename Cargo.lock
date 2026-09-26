@@ -38,7 +38,7 @@ dependencies = [
 [[package]]
 name = "gmssl-rs"
 version = "0.1.1"
-source = "git+https://github.com/jeromexiong/gmssl-rs-patched?rev=c38c69944929b5936bc71e28a3baa965ac582e40#c38c69944929b5936bc71e28a3baa965ac582e40"
+source = "git+https://github.com/jeromexiong/gmssl-rs-patched?rev=e05fd649fd989103e2f4300fec27b76fae33422a#e05fd649fd989103e2f4300fec27b76fae33422a"
 dependencies = [
  "gmssl-rs-sys",
  "libc",
@@ -47,7 +47,7 @@ dependencies = [
 [[package]]
 name = "gmssl-rs-sys"
 version = "0.1.0"
-source = "git+https://github.com/jeromexiong/gmssl-rs-sys-patched?rev=791d8f3944073e53452ee6ecbfcdae544f3192b4#791d8f3944073e53452ee6ecbfcdae544f3192b4"
+source = "git+https://github.com/jeromexiong/gmssl-rs-patched?rev=e05fd649fd989103e2f4300fec27b76fae33422a#e05fd649fd989103e2f4300fec27b76fae33422a"
 dependencies = [
  "cmake",
  "libc",

@@ -30,17 +30,19 @@ Windows x86_64（MSVC）**。
 2. GmSSL 的 `CMakeLists.txt` 硬编码 `CMAKE_INSTALL_PREFIX="C:/Program Files/GmSSL"`，
    而 VS 是多配置生成器（库落在 `lib/Release/`），0.1.0 的 `build.rs` 只认 `dst/lib`。
 
-上游 `GmSSL/gmssl-rs@main` 已经修好这两点（`cflag("-DWIN32")` + 构建时打补丁改 CMakeLists +
-`find_lib_dir`），**但没有发版**：crates.io 上 `gmssl-rs-sys` 至今只有 0.1.0（发布于 2026-05-31，
-早于修复）。因此本项目用 `[patch.crates-io]` 钉住一份**只改了 `build.rs`** 的 0.1.0 副本：
+上游 `GmSSL/gmssl-rs@main` 已经把这两处都修好了（`cflag("-DWIN32")`、构建时打补丁改
+CMakeLists、`find_lib_dir`、`pem_helpers.rs` 的 `#[cfg(windows)]` + `tmpfile`），**但没有发版**：
+crates.io 上 `gmssl-rs-sys` 至今只有 0.1.0、`gmssl-rs` 只有 0.1.1（都发布于 2026-05-31，早于修复）。
+因此本项目用 `[patch.crates-io]` 钉住一份把这两处回移好的副本：
 
-<https://github.com/jeromexiong/gmssl-rs-sys-patched>（rev 写死在 `Cargo.toml`，并由
-`Cargo.lock` + `--locked` 锁住）。该副本保持 **GmSSL 3.1.1**、源码随 crate 一起分发 ⇒
-**API/ABI 与本机已验证的版本逐字节一致**，构建也**不会下载 GmSSL、不需要 submodule**
-（联网只为了取这份 crate 本身）。
+<https://github.com/jeromexiong/gmssl-rs-patched>（按上游仓库布局：`gmssl/` + `gmssl-sys/`，
+后者是前者的 path 依赖 ⇒ **一条 patch 就够**；rev 写死在 `Cargo.toml`，并由 `Cargo.lock` +
+`--locked` 锁住）。该副本只有那两个文件与 crates.io 字节不同，且保持 **GmSSL 3.1.1**、源码随
+crate 一起分发 ⇒ **API/ABI 与本机已验证的版本逐字节一致**，构建也**不会下载 GmSSL、不需要
+submodule**（联网只为了取这份 crate 本身）。
 
 > 上游一发新版就能撤掉：删 `Cargo.toml` 里的 `[patch.crates-io]` 段，再
-> `cargo update -p gmssl-rs-sys`。
+> `cargo update -p gmssl-rs -p gmssl-rs-sys`。
 
 除 `build.rs` 那两处外，Windows 还多踩了一个**上游 crates.io 组合不自洽**的坑：`gmssl-rs`
 0.1.1 声明了两个 **GmSSL 3.2.0 才有**的符号（`x509_key_cleanup`、

@@ -387,11 +387,14 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
   `gmssl-rs-sys` 只有 0.1.0（2026-05-31 发布），而修复是 2026-06-21 之后才进 main；
   上游 main 还顺手把 GmSSL 换成 **3.2.0 tarball 下载**（可用 `GMSSL_SOURCE_DIR` 覆盖），
   所以**直接依赖上游 main 会连带跳 GmSSL 版本**（FFI 声明与封装层的配套关系也没验过）。
-  → **因此不走 R3、也不动 GmSSL 版本**：用 `[patch.crates-io]` 钉住一份**只改了 `build.rs`**
-  的 0.1.0 副本（<https://github.com/jeromexiong/gmssl-rs-sys-patched>；rev 写死在
+  → **因此不走 R3、也不动 GmSSL 版本**：用**一条** `[patch.crates-io]` 钉住一份把上述修复都
+  回移好的副本（<https://github.com/jeromexiong/gmssl-rs-patched>；按上游仓库布局
+  `gmssl/` + `gmssl-sys/`，后者是前者的 path 依赖 ⇒ 一条 patch 同时覆盖两个 crate；rev 写死在
   `Cargo.toml` 并由 `Cargo.lock` + `--locked` 锁住）。该副本保持 GmSSL 3.1.1、源码随 crate
   分发 ⇒ API/ABI 与已验证版本逐字节一致，构建无下载、无 submodule。
-  上游发版后删掉 `[patch]` 段 + `cargo update -p gmssl-rs-sys` 即可撤除（2 行）。
+  上游发版后删掉 `[patch]` 段 + `cargo update -p gmssl-rs -p gmssl-rs-sys` 即可撤除。
+  ⚠️ 不要改成「fork 上游 main 直接依赖」：main 已切到 GmSSL **3.2.0** tarball 下载，而 3.2.0
+  未开加速时 SM2 签名比 3.1.1 慢 5.7 倍（§8.1/§9），等于把性能基线一起换掉。
 - ✅ **SM2 签名的密钥缓存（已完成，有实测依据）**：库级曾只有 1395 ops/s（比 C 层基线低 45%，
   全花在每次调用重新解析 PKCS#8、含一次 EC 乘法校验公钥）。已新增 `_core.Sm2KeyHandle`
   （`#[pyclass]` 持已解析密钥），`SM2` 实例与 `compat`（`lru_cache(maxsize=8)`）各缓存一份 →

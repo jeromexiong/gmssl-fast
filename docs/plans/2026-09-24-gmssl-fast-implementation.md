@@ -881,9 +881,22 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
 
 副产品（值得反馈上游，但**未代发**）：① `gmssl-rs-sys` 的 `repository` 字段指向
 `guanzhi/gmssl-rs`（**404 死链**，真上游是 `GmSSL/gmssl-rs`）；② 该仓库的 submodule 仍钉在
-3.1.1 的 `d655c06b`，而 `build.rs` 里 `GMSSL_RELEASE_TAG` 已是 `v3.2.0`（自相矛盾；且 cargo
-的 git 依赖不初始化 submodule，下游只会走 3.2.0 下载路径）；③ 坑 4 那对不自洽；
-④ 0.1.0/0.1.1 都早于 main 上的修复——建议上游发一个补丁版。
+3.1.1 的 `d655c06b`，而 `build.rs` 里 `GMSSL_RELEASE_TAG` 已是 `v3.2.0`（自相矛盾；且
+`locate_gmssl_source()` 现在根本不读 submodule，下游只会走 3.2.0 下载路径）；③ 坑 4 那对
+不自洽；④ 0.1.0/0.1.1 都早于 main 上的修复——建议上游发一个补丁版。
+
+**收敛（同日，用户提出「补丁反而要两个库支持」之后）**：把两个补丁仓库合并成一个
+<https://github.com/jeromexiong/gmssl-rs-patched> @`e05fd64`，按上游仓库布局装配
+（`gmssl/` + `gmssl-sys/`，前者对后者是 **path 依赖**）⇒ 本项目 `[patch.crates-io]` 从两条
+变成**一条**，`Cargo.lock` 里两个 crate 同源同一 rev（已核对）。内容仍是「提交 1 = crates.io
+原始源码、提交 2 = 只动那两个文件的补丁、提交 3 = 文档」，GmSSL 仍 3.1.1。
+旧的 `gmssl-rs-sys-patched` 被本仓库取代（保留备查，可删）。
+
+⚠️ 评估过但**没做**的两条路：把上游 main 整个 fork 过来直接依赖（= 连带换 GmSSL 3.2.0 +
+构建期下载，且 3.2.0 未开加速时 SM2 签名慢 5.7 倍，属设计 §9 的 R3 范畴，应作为独立决策）；
+以及把两个 crate vendor 进本仓库（+3MB 第三方 C 源码进项目仓库，未获用户同意故不做）。
+另：**上游 PR 已无内容可提**——四处修复 main 里全都有（`build.rs` 的 `cflag`/补丁/`find_lib_dir`/
+`advapi32`、`pem_helpers.rs` 的 `#[cfg(windows)]`），能做的只是提 issue 请他们发补丁版。
 
 ### 与计划的偏差（均已记录理由）
 
