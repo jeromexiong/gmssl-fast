@@ -2,7 +2,7 @@
 
 标准向量：GM/T 0002-2012（SM4 分组密码算法）。
 
-对外约定（与 fastapiadmin 既有实现一致）：
+对外约定（与存量实现一致）：
 - ``SM4.encrypt()`` 返回 ``iv(16)‖ciphertext``；ECB 模式无 IV 前缀
 - 使用 PKCS7 填充
 """

@@ -10,9 +10,8 @@
 - 公钥：接受 128（无 04 前缀）与 130（含 04 前缀）字符两种输入
 - 解密：不做「首字节是 0x04 就剥离」的启发式，而是**两候选逐个试解**
 
-GOLDEN_* 常量集中定义在 ``tests/golden.py``（逐字复制自
-``fastapiadmin/backend/tests/core/test_sm_crypto.py`` 的 2026-09 快照），
-用于证明存量密文/签名在新库上依然可用。
+GOLDEN_* 常量集中定义在 ``tests/golden.py``（2026-09 存量数据快照），
+用于证明历史密文/签名在新库上依然可用。
 """
 
 import pytest

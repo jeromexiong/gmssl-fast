@@ -19,7 +19,7 @@ def test_sm3_standard_vector() -> None:
 
 
 # ---------------------------------------------------------------------------
-#  fastapiadmin 契约（golden 向量，设计 §4.2 / §7）
+#  存量契约（golden 向量）
 # ---------------------------------------------------------------------------
 
 # salt 固定为 32 个 'a'，便于验证 hash 的确定性（真实场景由 secrets 生成）
@@ -29,7 +29,7 @@ GOLDEN_PWD = (
 )
 
 
-def test_password_hash_matches_fastapiadmin_format() -> None:
+def test_password_hash_matches_legacy_format() -> None:
     # 旧实现：hash = SM3((password + salt).encode())，其中 salt 是十六进制字符串本身
     assert gmssl_fast.sm3_hex(("admin123" + "a" * 32).encode()) == GOLDEN_PWD.split("$")[1]
 

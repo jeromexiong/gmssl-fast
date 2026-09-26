@@ -51,8 +51,8 @@ def sm3_password_hash(password: str) -> str:
     ``salt`` 是 16 字节随机值的十六进制（32 字符），
     ``hash`` = ``SM3((password + salt).encode())``。
 
-    该格式与 fastapiadmin 既有实现（``Sm3Cipher.hash_password``）逐位一致，
-    因此存量数据无需转换。
+    该格式与存量实现（``Sm3Cipher.hash_password``）逐位一致，
+    因此历史数据无需转换。
     """
     salt = secrets.token_hex(16)
     return f"{salt}${sm3_hex((password + salt).encode('utf-8'))}"

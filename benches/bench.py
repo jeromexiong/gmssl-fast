@@ -12,9 +12,8 @@
 - 每项取 `--repeat` 次里最快的一次；
 - 纯 Python 对照（`snowland-smx`、`gmssl`）**装了才跑**，且用 `--ref-mib`（默认 1 MiB）、
   `--ref-ops`（默认 100 次 SM2）的小规模——它们慢 1～2 个数量级，用 64 MiB 要跑几分钟。
-  `pysmx` 的 SM2 `Sign/Verify` 只收「已算好的摘要」，所以按老实现
-  （fastapiadmin `sm_crypto.py`）的姿势手拼 ZA 再派生 E = SM3(ZA‖M)，
-  **摘要开销计在签名里**（老代码就是这样）。
+  `pysmx` 的 SM2 `Sign/Verify` 只收「已算好的摘要」，所以按存量实现的姿势
+  手拼 ZA 再派生 E = SM3(ZA‖M)，**摘要开销计在签名里**（旧代码就是这样）。
 
 ⚠️ 数字与机器强相关：README / 设计文档里引用时必须标注测试机与架构。
 ⚠️ 两边量级差很多：SM3/SM4 大缓冲吞吐差 500～800×（纯 Python 逐块循环），
@@ -234,7 +233,7 @@ def main() -> int:
             print(f"{impl_name:<16}{op_name:<10}{our_text:>16}{ref_text:>16}{ratio:>7.1f}x")
 
     print(
-        "\n注：SM2 侧的对照按老实现（fastapiadmin）的姿势手拼 ZA 后再算摘要，"
+        "\n注：SM2 侧的对照按存量实现的姿势手拼 ZA 后再算摘要，"
         "摘要开销计在签名里；两侧都是单线程、同一条消息。"
     )
     return 0

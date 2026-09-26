@@ -15,7 +15,6 @@
         compat.Sm4Cipher,
     )
 
-之后调用方（``CommonCryptogramUtil``、``PwdUtil``、SQLAlchemy ``TypeDecorator`` 等）**零改动**。
 
 ``configure(sm2_public_key=...)`` 是**可选**的：旧签名 ``Sm2Cipher.decrypt(private_key,
 ciphertext)`` 不带公钥，库会在缺公钥时自行派生 ``d·G``。显式注入的好处是省掉那次 EC 乘法，

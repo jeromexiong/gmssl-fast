@@ -16,7 +16,7 @@ classifiers = [
 
 [project.optional-dependencies]
 # 测试专用。snowland-smx 是「旧库」，用于与存量实现的**双向**对拍
-# （tests/test_cross_fastapiadmin.py）；不装则该文件整体跳过。
+# （tests/test_cross_legacy.py）；不装则该文件整体跳过。
 test = ["pytest>=8.0", "snowland-smx>=1.0"]
 
 [tool.maturin]

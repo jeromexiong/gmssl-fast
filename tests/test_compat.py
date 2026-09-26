@@ -1,7 +1,7 @@
 """compat 门面测试：调用形态必须与既有 ``Sm2Cipher`` / ``Sm3Cipher`` / ``Sm4Cipher`` 逐字对齐。
 
-对齐依据：``fastapiadmin/backend/app/utils/sm_crypto_util.py`` 只用到了
-``Sm2Cipher`` 的 4 个、``Sm3Cipher`` 的 4 个、``Sm4Cipher`` 的 4 个方法（已逐条核对源码）。
+对齐依据：存量实现只用到 ``Sm2Cipher`` 的 4 个、``Sm3Cipher`` 的 4 个、``Sm4Cipher`` 的
+4 个方法（已逐条核对源码），因此门面只需覆盖这些方法。
 """
 
 import pytest

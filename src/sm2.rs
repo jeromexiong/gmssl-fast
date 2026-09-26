@@ -381,7 +381,7 @@ impl Sm2KeyHandle {
 mod tests {
     use super::*;
 
-    /// 逐字来自 fastapiadmin `tests/core/test_sm_crypto.py` 的 golden 密钥对。
+    /// 冻结的 golden 密钥对，与 `tests/golden.py` 的 `GOLDEN_SM2_PRIV` / `GOLDEN_SM2_PUB` 一致。
     const GOLDEN_SCALAR: &str = "fef1cd14d44d8a57afa854312a2fb11155638a9d6444d8a35db0e75cf4949246";
     const GOLDEN_POINT: &str = "046574bf3f968a9fc217ce48f65543c64be1a6a8dc8325ffed3125e425fb09626\
 b3996ca6e16bc109c3e43a1133a2c16485f4f67dd0d8dded6b837f4e9dca2ea21";
@@ -475,7 +475,7 @@ b3996ca6e16bc109c3e43a1133a2c16485f4f67dd0d8dded6b837f4e9dca2ea21";
     fn plaintext_limit_is_255_bytes_with_clear_error() {
         // GmSSL 的 `SM2_CIPHERTEXT` 用固定 255 字节缓冲（`sm2.h`），所以明文上限是 255。
         // ⚠️ 这是 **GmSSL API 的限制**，不是裸 C1C3C2 格式的限制（pysmx 等纯 Python
-        //    实现不受此限；fastapiadmin 的契约测试里那条 512 字节用例因此改为「已知限制」）。
+        //    实现不受此限；存量契约测试里那条 512 字节用例因此改为「已知限制」）。
         let point = parse_point(GOLDEN_POINT).unwrap();
         let public_key = point_key(&point).unwrap();
         let private_key = scalar_key(&golden_scalar(), Some(&point)).unwrap();

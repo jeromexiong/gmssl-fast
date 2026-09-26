@@ -1,4 +1,4 @@
-"""与存量实现（fastapiadmin 的 ``snowland-smx`` 版 ``sm_crypto.py``）**双向**对拍。
+"""与存量实现（``snowland-smx`` 版）**双向**对拍。
 
 这里把 ``pysmx`` 当作「旧库」：
 
@@ -6,7 +6,7 @@
 2. **旧库产出 → 本库能处理**（新库必须能读线上存量数据）
 3. **golden 常量自洽**（参照实现本身能处理这些存量向量，否则「对拍」没有基准）
 
-只有三个方向都通，才谈得上「把 ``sm_crypto.py`` 换成几行 re-export」（设计 §11）。
+只有三个方向都通，才谈得上「把旧实现换成几行 re-export」。
 
 未安装 ``snowland-smx`` 时整文件跳过——``pip install -e '.[test]'`` 可装上。
 本文件中的 ZA 拼装、参数长度、重试策略均逐字复刻旧实现（含它自己的重试怪癖）。
@@ -181,7 +181,7 @@ def test_sm4_cbc_is_byte_identical_to_legacy(size: int) -> None:
     """CBC + PKCS7 密文逐字节相同，且双方可互相解密。"""
     key = bytes.fromhex(GOLDEN_SM4_KEY_HEX)
     iv = bytes.fromhex(GOLDEN_SM4_IV_HEX)
-    plaintext = (b"fastapiadmin-sm4" * 8)[:size]
+    plaintext = (b"gmssl-fast-sm4" * 8)[:size]
     ours = compat.Sm4Cipher.encrypt(key, plaintext, iv)
     legacy = _legacy_sm4_cbc_encrypt(key, iv, plaintext)
     assert ours == legacy
