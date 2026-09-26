@@ -23,8 +23,8 @@ CI 产出 **8 个 wheel**，全部原生构建，且每个轮子都经过「装�
 | Windows | x64、arm64 |
 
 其他平台走源码安装：`pip install gmssl-fast` 会从 sdist 用 Rust + CMake 现场构建
-（要求 CMake ≥ 3.6）。注意 glibc 基线是 **2.28**（CentOS 8 / Ubuntu 18.10 起），
-更老的发行版（如 CentOS 7）请用源码安装。
+（要求 CMake ≥ 3.6）。实测标签：glibc 轮子是 **`manylinux_2_17`（manylinux2014）**，
+即 CentOS 7 及以上都能直接用；musl 轮子是 **`musllinux_1_2`**（Alpine 3.12+）。
 
 ## 快速开始
 
