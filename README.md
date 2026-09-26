@@ -118,6 +118,14 @@ crates.io 上仍是修复前的版本，Windows 下编不过。该副本保持 *
 crates.io 字节不同。上游一发新版就能撤掉：删掉 `[patch.crates-io]` 段，再
 `cargo update -p gmssl-rs -p gmssl-rs-sys`。
 
+**发布**：推 `v*` 标签即触发 8 平台构建 + 上传（`workflow_dispatch` 只构建、不发）。
+走 PyPI **Trusted Publishing（OIDC）**，仓库里**不需要任何 secret**，但目标站要先配好
+pending publisher，四项必须对上：项目名 `gmssl-fast` / 仓库 `gmssl-fast` /
+workflow `build.yml` / environment `pypi`。上传内容是 **8 个 wheel + 1 个 sdist**——
+sdist 是「其他平台源码安装」的前提，缺了它那些平台直接装不上。当前目标钉在 TestPyPI；
+发正式 PyPI 时在 pypi.org 配同样的 pending publisher，并删掉 publish 步里的
+`repository-url` 行。
+
 **开发**：
 
 ```bash

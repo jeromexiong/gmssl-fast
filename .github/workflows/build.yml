@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-  # 手动触发可以在不打 tag 的情况下跑完整 4 平台 wheel（publish 仍然只在 tag 上跑），
+  # 手动触发可以在不打 tag 的情况下跑完整 8 平台 wheel（publish 仍然只在 tag 上跑），
   # 用来验证平台构建而不惊动 PyPI。
   workflow_dispatch:
 
@@ -62,6 +62,17 @@ jobs:
 
       - name: Python 测试
         run: pytest -q
+
+      - name: 构建 sdist
+        # 必须发 sdist：8 个 wheel 覆盖不到的平台上（其他 glibc/musl 组合、FreeBSD 等）
+        # `pip install gmssl-fast` 只能靠 sdist 现场编译；没有 sdist 就是直接失败，
+        # 而 README 明确承诺了「其他平台走源码安装」。
+        run: maturin sdist --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
 
   # ------------------------------------------------------------ 多平台 abi3 wheel
   wheels:
@@ -207,8 +218,14 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
       - name: 发布前清点
-        run: ls -l dist && ls dist/*.whl | wc -l
+        # 期望：8 个 wheel + 1 个 sdist
+        run: ls -l dist && echo "wheel=$(ls dist/*.whl | wc -l) sdist=$(ls dist/*.tar.gz | wc -l)"
 
       - name: 发布
         uses: pypa/gh-action-pypi-publish@release/v1
