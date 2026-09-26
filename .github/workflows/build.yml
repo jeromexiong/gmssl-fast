@@ -229,10 +229,8 @@ jobs:
 
       - name: 发布
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          # 走 Trusted Publishing（OIDC），所以**不传 password**（本仓库没有任何 secret）。
-          # 前提是在目标站配好 pending publisher，四项都要对上：
-          #   TestPyPI（当前）：项目 gmssl-fast / 仓库 jeromexiong/gmssl-fast /
-          #                    workflow build.yml / environment pypi
-          # 发正式 PyPI 时：在 pypi.org 配同样的 pending publisher，然后删掉下面这行。
-          repository-url: https://test.pypi.org/legacy/
+        # 走 Trusted Publishing（OIDC）：**不传 password**，仓库里也不需要任何 secret。
+        # 目标站必须先配好 pending publisher，四项要对上（pypi.org 与 test.pypi.org 各配一次）：
+        #   项目 gmssl-fast / 仓库 jeromexiong/gmssl-fast / workflow build.yml / environment pypi
+        # 不写 repository-url ⇒ 发正式 PyPI（TestPyPI 已于 0.1.0 验证通过）。
+        # 要临时改发 TestPyPI，加一行 `repository-url: https://test.pypi.org/legacy/` 即可。
