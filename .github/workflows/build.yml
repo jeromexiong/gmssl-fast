@@ -89,16 +89,21 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             manylinux: auto
-          # ⚠️ aarch64-unknown-linux-gnu 试过一腿但失败（run 36247530045 / job 108419496554）：
-          # maturin-action 在 x86_64 runner 上构建 aarch64 需要 binfmt/qemu 支持，本流水线
-          # 没注册，因此该腿在 **action 编排阶段** 就报错（Node 侧 ChildProcess 异常，
-          # 不是 GmSSL 编译失败）。两种修法（都还没试）：
-          #   ① 在构建前加 `docker/setup-qemu-action@v3`（标准做法，构建走模拟、慢一些）；
-          #   ② 换原生 ARM runner `ubuntu-24.04-arm`（免模拟，但私有仓库可能计费）。
-          # 目前 ARM 服务器用户需要自行源码编译（Rust + CMake，README 有说明）。
+          # ARM Linux：曾在 x86_64 runner 上试过这腿（run 36247530045）——失败，原因是那里跑
+          # manylinux aarch64 容器需要 binfmt/qemu，而编排层没注册（Node 侧 ChildProcess 异常，
+          # 不是 GmSSL 编译问题：本机 podman 起原生 aarch64 容器已实测能建出轮子并跑通测试）。
+          # 仓库转为公开后 ARM runner 免费且规格更高（4C/16GB），于是改用 **原生** runner：
+          # 无需 qemu、构建更快，还能就地跑运行期验证。
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            manylinux: auto
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            # Alpine / musl 容器场景：musllinux 容器能正常编译 GmSSL（本轮已实测通过 ✓）
+            # Alpine / musl 容器场景：musllinux 容器能正常编译 GmSSL（实测通过 ✓）
+            manylinux: musllinux_1_2
+          # ARM 上的 Alpine（树莓派 / ARM 容器）：同样走原生 ARM runner
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
             manylinux: musllinux_1_2
           - target: aarch64-apple-darwin
             os: macos-latest # arm64
@@ -134,23 +139,30 @@ jobs:
             command -v cmake >/dev/null 2>&1 || python3 -m pip install cmake
             cmake --version
 
-      - name: 校验产物（Linux 必须是 manylinux，PyPI 不接受裸 linux_x86_64）
-        if: matrix.manylinux == 'auto'
+      - name: 校验产物标签（PyPI 不接受裸 linux_*.whl）
+        # glibc 腿必须落 manylinux*、musl 腿必须落 musllinux*，否则要到上传时才会被打回。
+        if: runner.os == 'Linux'
         run: |
           ls -l dist
-          ls dist/*manylinux*.whl
+          for w in dist/*.whl; do
+            case "$w" in
+              *manylinux*|*musllinux*) ;;
+              *) echo "❌ 标签不合规（PyPI 会拒收）: $w"; exit 1 ;;
+            esac
+          done
+          echo "✅ 标签合规"
 
-      - name: Windows 冒烟 + 全量测试
-        # Windows（x64 与 ARM64）上用了 /FORCE:UNRESOLVED 放宽链接（原因：crates.io 的 gmssl-rs
-        # 0.1.1 声明了两个 GmSSL 3.2.0 才有的符号，详见 build.rs）—— 代价是「真缺符号」不再在
-        # 链接期报错，所以必须由**运行期证据**兜底：装真轮子、跑完整 pytest。
-        # 两条 Windows 腿跑的都是 native 进程，不存在「交叉编译没验证」的问题。
+      - name: 运行期验证（装真轮子 + 跑完整测试）
+        # 为什么每条腿都要做：Windows 两条腿用了 /FORCE:UNRESOLVED 放宽链接（crates.io 的
+        # gmssl-rs 0.1.1 声明了两个 GmSSL 3.2.0 才有的符号，详见 build.rs）—— 代价是「真缺符号」
+        # 不再在链接期报错 → 必须由**运行期证据**兜底。其余腿顺带做同一件事，证明
+        # 「轮子在这台原生机器上真的能 import、能算出正确 SM3」——构建成功 ≠ 可用。
+        # 所有腿都是原生 runner（含 ARM Linux / ARM Windows），不存在「交叉编译未验证」的缺口；
         # snowland-smx 装不上也不影响（对拍用例会 importorskip 自动跳过）。
         #
         # ⚠️ shell 必须是 bash：Windows runner 默认是 pwsh，它不展开 `dist/*.whl`，
         # pip 会收到字面量 `*` 并报 `Invalid wheel filename (wrong number of parts): '*'`
-        # （第一次就是这么翻的）。windows runner 自带 Git Bash。
-        if: runner.os == 'Windows'
+        # （第一次就是这么翻的）。三平台都有 bash（win11-arm 镜像自带 Bash 5.3）。
         shell: bash
         run: |
           python -m pip install -U pytest
