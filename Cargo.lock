@@ -48,8 +48,7 @@ dependencies = [
 [[package]]
 name = "gmssl-rs-sys"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5131a9f408e9c1c48ed12ffb52fd9578e9172a06afe09a0a01fd5bf625fa7fa1"
+source = "git+https://github.com/jeromexiong/gmssl-rs-sys-patched?rev=791d8f3944073e53452ee6ecbfcdae544f3192b4#791d8f3944073e53452ee6ecbfcdae544f3192b4"
 dependencies = [
  "cmake",
  "libc",

@@ -72,15 +72,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ⚠️ Windows（x86_64-pc-windows-msvc）暂不在列：上游链路在 MSVC 下构建不过。
-        # CI 实测 3 次：GmSSL 3.1.1 的 api.h / socket.h / dylib.h 用 `#ifdef WIN32`，
-        # 而 cmake-rs 会自己设 CMAKE_C_FLAGS / CMAKE_C_FLAGS_RELEASE，把 CMake 平台
-        # 默认的 /DWIN32 顶掉 → 代码走 POSIX 分支 → MSVC 报 C1083 缺 dlfcn.h / netdb.h。
-        # 已试过 CMAKE_C_FLAGS=/DWIN32 与
-        # CMAKE_C_FLAGS_RELEASE=/DWIN32;/MD;/O2;/Ob2;/DNDEBUG（VS 生成器只认后者），
-        # 宏都没能真正到达 cl.exe。要拿下 Windows 得走设计 §9 的 R3：
-        # vendor 上游两个 crate + 自控构建配方，顺手给 GmSSL 补一句
-        # `#if defined(_WIN32) && !defined(WIN32)` → `#define WIN32`。
+        # Windows（x86_64-pc-windows-msvc）之前构建不过，根因是上游链路在 MSVC 上的两处硬伤：
+        # ① GmSSL 的 api.h / socket.h / dylib.h 用 `#ifdef WIN32`，而 MSVC 只预定义 _WIN32。
+        #    CMake 的 Windows-MSVC 平台模块本会补 /DWIN32，但 cmake-rs 会自己覆盖
+        #    CMAKE_C_FLAGS / CMAKE_C_FLAGS_RELEASE 把它顶掉 → 代码走 POSIX 分支 → C1083
+        #    缺 dlfcn.h / netdb.h。（实测走环境变量传 CMAKE_C_FLAGS(_RELEASE) 都到不了 cl.exe。）
+        # ② GmSSL 的 CMakeLists.txt 硬编码 CMAKE_INSTALL_PREFIX="C:/Program Files/GmSSL"，
+        #    且 VS 是多配置生成器（库落在 lib/Release/），而 0.1.0 的 build.rs 只认 dst/lib。
+        # 上游 GmSSL/gmssl-rs@main 已修好这两点（cflag("-DWIN32") + 打补丁 CMakeLists +
+        # find_lib_dir），但**没有发版**：crates.io 上仍是修复前的 0.1.0。
+        # 因此通过 Cargo.toml 的 [patch.crates-io] 钉住一份回移了该修复的 0.1.0 副本：
+        #   https://github.com/jeromexiong/gmssl-rs-sys-patched
+        # 它只有 build.rs 与 crates.io 字节不同，GmSSL 仍是 3.1.1 且源码随 crate 一起分发
+        # （构建不需要下载 GmSSL、不需要 submodule）；rev 由 Cargo.lock + --locked 钉死。
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
@@ -89,6 +93,8 @@ jobs:
             os: macos-latest # arm64
           - target: x86_64-apple-darwin
             os: macos-15-intel # 唯一还在售的 Intel macOS runner
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v4
 
