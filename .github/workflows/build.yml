@@ -123,6 +123,19 @@ jobs:
           ls -l dist
           ls dist/*manylinux*.whl
 
+      - name: Windows 冒烟 + 全量测试
+        # Windows 上用了 /FORCE:UNRESOLVED 放宽链接（原因：crates.io 的 gmssl-rs 0.1.1
+        # 声明了两个 GmSSL 3.2.0 才有的符号，详见 build.rs）—— 代价是「真缺符号」不再在
+        # 链接期报错，所以必须由**运行期证据**兜底：装真轮子、跑完整 pytest。
+        # snowland-smx 装不上也不影响（对拍用例会 importorskip 自动跳过）。
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install -U pytest
+          python -m pip install -U snowland-smx || true
+          python -m pip install --force-reinstall --no-deps dist/*.whl
+          python -c "import gmssl_fast; assert gmssl_fast.sm3_hex(b'abc').startswith('66c7f0f4')"
+          pytest tests -q
+
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.target }}

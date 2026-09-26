@@ -17,13 +17,38 @@
 pip install gmssl-fast          # abi3 wheel，Python ≥ 3.8
 ```
 
-已实测产出 wheel 的平台（CI）：**Linux x86_64（manylinux）/ macOS arm64 / macOS x86_64**。
+已实测产出 wheel 的平台（CI）：**Linux x86_64（manylinux）/ macOS arm64 / macOS x86_64 /
+Windows x86_64（MSVC）**。
 
-⚠️ **Windows 暂不支持**：上游 `gmssl-rs-sys` 在 MSVC 下构建不过。GmSSL 的 `api.h` /
-`socket.h` / `dylib.h` 用 `#ifdef WIN32`，而构建链上的 `cmake-rs` 会自己设
-`CMAKE_C_FLAGS(_RELEASE)`、把 CMake 平台默认的 `/DWIN32` 顶掉 → 代码走 POSIX 分支，
-MSVC 报 `C1083: 缺 dlfcn.h / netdb.h`。拿下 Windows 需走设计文档 §9 的 R3（vendor 上游
-crate + 自控构建配方，顺手补一句 `#if defined(_WIN32) && !defined(WIN32)`）。
+### Windows 是怎么拿下的
+
+上游 `gmssl-rs-sys` **0.1.0** 在 MSVC 下构建不过，硬伤有两处：
+
+1. GmSSL 的 `api.h` / `socket.h` / `dylib.h` 用 `#ifdef WIN32`，而 MSVC 只预定义 `_WIN32`。
+   CMake 的 `Windows-MSVC` 平台模块本会补 `/DWIN32`，但 `cmake-rs` 覆盖
+   `CMAKE_C_FLAGS(_RELEASE)` 时把它顶掉了 → 代码走 POSIX 分支 → `C1083: 缺 dlfcn.h / netdb.h`。
+2. GmSSL 的 `CMakeLists.txt` 硬编码 `CMAKE_INSTALL_PREFIX="C:/Program Files/GmSSL"`，
+   而 VS 是多配置生成器（库落在 `lib/Release/`），0.1.0 的 `build.rs` 只认 `dst/lib`。
+
+上游 `GmSSL/gmssl-rs@main` 已经修好这两点（`cflag("-DWIN32")` + 构建时打补丁改 CMakeLists +
+`find_lib_dir`），**但没有发版**：crates.io 上 `gmssl-rs-sys` 至今只有 0.1.0（发布于 2026-05-31，
+早于修复）。因此本项目用 `[patch.crates-io]` 钉住一份**只改了 `build.rs`** 的 0.1.0 副本：
+
+<https://github.com/jeromexiong/gmssl-rs-sys-patched>（rev 写死在 `Cargo.toml`，并由
+`Cargo.lock` + `--locked` 锁住）。该副本保持 **GmSSL 3.1.1**、源码随 crate 一起分发 ⇒
+**API/ABI 与本机已验证的版本逐字节一致**，构建也**不会下载 GmSSL、不需要 submodule**
+（联网只为了取这份 crate 本身）。
+
+> 上游一发新版就能撤掉：删 `Cargo.toml` 里的 `[patch.crates-io]` 段，再
+> `cargo update -p gmssl-rs-sys`。
+
+除 `build.rs` 那两处外，Windows 还多踩了一个**上游 crates.io 组合不自洽**的坑：`gmssl-rs`
+0.1.1 声明了两个 **GmSSL 3.2.0 才有**的符号（`x509_key_cleanup`、
+`zuc256_generate_keystream`，后者在 3.1.1 里只是 `zuc.h` 的一个宏），而它依赖的
+`gmssl-rs-sys` 0.1.0 构建的是 **3.1.1**。macOS/Linux 上静态库按需取成员、恰好没拉到那两个
+CGU，MSVC 下则直接 `LNK2019 → LNK1120`。本库不暴露 X509/ZUC，这两个符号不会被调用，
+所以在 `build.rs` 里加了 `/FORCE:UNRESOLVED` 放行 —— ⚠️ 代价是真缺符号时改为**调用期**才崩，
+因此 CI 的 Windows 腿会「装真轮子 + 跑完整 pytest」在运行期兜底（不能只靠链接参数自证）。
 
 ## 快速开始
 

@@ -13,7 +13,7 @@
 | 算法范围 | SM2 + SM3 + SM4（CBC / CTR / GCM / **ECB**）；不暴露 SM9 / ZUC / X.509 |
 | SM4-ECB | 上游无封装，用 `Sm4Key::encrypt_block` 自拼 + 自管 PKCS7（纯安全 Rust，无 unsafe） |
 | SM4-GCM | **只提供一次性 API**（上游未暴露流式），文档写明内存占用 |
-| wheel | **abi3-py38**，3 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64`（**Windows 暂不支持**，原因见 §10） |
+| wheel | **abi3-py38**，4 个包：`manylinux_2_28_x86_64` / `macosx arm64` / `macosx x86_64` / `win_amd64`（Windows 的构建方式见 §10） |
 | 工具链 | pyo3 0.29.x（MSRV Rust 1.83）、maturin 1.15.x、CMake（构建前置） |
 | 包名 | `gmssl-fast`（PyPI 未占用，HTTP 404，发布前占名）；模块 `gmssl_fast` |
 | SM2 线格式 | **裸格式，且是唯一行为**（密文裸 C1C3C2、签名裸 r‖s），**不暴露任何格式参数**；DER 只是内部实现细节，见 §4.1 |
@@ -210,9 +210,9 @@ gm.sm3_password_verify("admin123", stored)   # -> bool；格式不合法直接 F
 
 1. **PR 流水**（`ubuntu-latest`）：`maturin develop --locked` → `pytest` →
    `cargo clippy -- -D warnings` → `cargo fmt --check`。正确性门禁不依赖全平台矩阵。
-2. **Release 流水**（`v*` tag）：**3 个 target** 各出 1 个 wheel
+2. **Release 流水**（`v*` tag）：**4 个 target** 各出 1 个 wheel
    （`x86_64-unknown-linux-gnu` manylinux auto / `aarch64-apple-darwin` /
-   `x86_64-apple-darwin`；Windows 见 §10），每平台构建后上传 artifact，
+   `x86_64-apple-darwin` / `x86_64-pc-windows-msvc`），每平台构建后上传 artifact，
    最后**单独一个 job** 用 `pypa/gh-action-pypi-publish` 发布
    （不要在矩阵里各自 publish，会重复/竞争）。
    `workflow_dispatch` 也能跑整套矩阵（不发 PyPI）——不发版时验证平台构建用。
@@ -354,7 +354,8 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
    并在 build.rs 里显式打开 `ENABLE_SM4_ARM64` / `ENABLE_SM2_ARM64` /
    `ENABLE_SM3_ARM64` / `ENABLE_GMUL_ARM64` 等开关；
 4. 需要 GmSSL 3.2.0 的新特性；
-5. **需要 Windows 支持**（CI 实测 MSVC 构建不过，见 §10；需要给 GmSSL 补 `WIN32` 宏）。
+5. ~~需要 Windows 支持~~ —— **已解决，不必走 R3**：上游 main 已修好，但未发版；
+   改用 `[patch.crates-io]` 钉住一份只改了 `build.rs` 的 0.1.0 副本（见 §10）。
 
 做法：把 `gmssl-rs` + `gmssl-rs-sys` 源码 vendor 进本仓库（Apache-2.0，合法），
 改 build.rs 的开关与源码版本。**注意**：R3 必须先验证"打开加速后 SM2 签名是否
@@ -371,16 +372,26 @@ SM4-CBC +29%、SM4-GCM +14%，但 **SM2 签名 −82%**。
 - **manylinux 容器是否自带 cmake（原「最大未知项」）→ 已有答案**：CI 的 Linux 腿
   （`manylinux: auto`）**构建通过**，产物也校验了带 `manylinux` 标签。流水线仍保留幂等写法
   （`command -v cmake || python3 -m pip install cmake` + 无条件 `cmake --version`）防镜像变动。
-- **Windows 不支持（新增，CI 实测 3 次）**：`x86_64-pc-windows-msvc` 已在矩阵中移除。
-  根因有两层：① GmSSL 3.1.1 的 `include/gmssl/api.h`、`socket.h`、`dylib.h` 用
-  `#ifdef WIN32`（而 MSVC 只预定义 `_WIN32`）；② 正常 MSVC+CMake 会由平台模块
+- ✅ **Windows（已解决：`x86_64-pc-windows-msvc` 回到矩阵）**：修复前 CI 实测 3 次全败，
+  根因实际有**两处**：① GmSSL 3.1.1 的 `include/gmssl/api.h`、`socket.h`、`dylib.h` 用
+  `#ifdef WIN32`（而 MSVC 只预定义 `_WIN32`）；正常 MSVC+CMake 会由平台模块
   `Windows-MSVC.cmake` 给出 `/DWIN32`，但 **cmake-rs 会自己设 `CMAKE_C_FLAGS` /
-  `CMAKE_C_FLAGS_RELEASE`，把它顶掉** → 代码走 POSIX 分支 → `C1083: 缺少 dlfcn.h / netdb.h`。
-  试过 `CMAKE_C_FLAGS=/DWIN32` 与（VS 生成器才认的）
-  `CMAKE_C_FLAGS_RELEASE=/DWIN32;/MD;/O2;/Ob2;/DNDEBUG`，宏均未到达 cl.exe。
-  → **要拿下 Windows 必须走 R3**（vendor + 自控构建，顺带给 GmSSL 补
-  `#if defined(_WIN32) && !defined(WIN32)` → `#define WIN32`）。用户实际部署目标是 Linux 服务，
-  当前不阻塞。
+  `CMAKE_C_FLAGS_RELEASE`，把它顶掉** → 代码走 POSIX 分支 → `C1083: 缺少 dlfcn.h / netdb.h`；
+  ② GmSSL 的 `CMakeLists.txt` 硬编码 `CMAKE_INSTALL_PREFIX="C:/Program Files/GmSSL"`，
+  且 VS 是多配置生成器（库落在 `lib/Release/`，0.1.0 的 `dst/lib` 断言不成立）。
+  **关键事实（修正早先判断）**：环境变量路线（`CMAKE_C_FLAGS` / `CMAKE_C_FLAGS_RELEASE`）
+  到不了 cl.exe —— 上游能过的写法是 cmake-rs 的 **`cmake_cfg.cflag("-DWIN32")`**
+  （`define()` 塞的是 CMake 缓存变量，跟编译器宏不是一回事；`GMSSL_CMAKE_DEFINES` 又走
+  `split_whitespace`，表达不了多 flag）。
+  **结论：上游 `GmSSL/gmssl-rs@main` 已全部修好，但没有发版** —— crates.io 上
+  `gmssl-rs-sys` 只有 0.1.0（2026-05-31 发布），而修复是 2026-06-21 之后才进 main；
+  上游 main 还顺手把 GmSSL 换成 **3.2.0 tarball 下载**（可用 `GMSSL_SOURCE_DIR` 覆盖），
+  所以**直接依赖上游 main 会连带跳 GmSSL 版本**（FFI 声明与封装层的配套关系也没验过）。
+  → **因此不走 R3、也不动 GmSSL 版本**：用 `[patch.crates-io]` 钉住一份**只改了 `build.rs`**
+  的 0.1.0 副本（<https://github.com/jeromexiong/gmssl-rs-sys-patched>；rev 写死在
+  `Cargo.toml` 并由 `Cargo.lock` + `--locked` 锁住）。该副本保持 GmSSL 3.1.1、源码随 crate
+  分发 ⇒ API/ABI 与已验证版本逐字节一致，构建无下载、无 submodule。
+  上游发版后删掉 `[patch]` 段 + `cargo update -p gmssl-rs-sys` 即可撤除（2 行）。
 - ✅ **SM2 签名的密钥缓存（已完成，有实测依据）**：库级曾只有 1395 ops/s（比 C 层基线低 45%，
   全花在每次调用重新解析 PKCS#8、含一次 EC 乘法校验公钥）。已新增 `_core.Sm2KeyHandle`
   （`#[pyclass]` 持已解析密钥），`SM2` 实例与 `compat`（`lru_cache(maxsize=8)`）各缓存一份 →
