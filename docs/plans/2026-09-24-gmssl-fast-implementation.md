@@ -843,6 +843,48 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
    另核实：**库侧没有 1/256 级失败路径**——GmSSL 自己就重选 k / 重试 KDF
    （`sm2_lib.c:511`、`:529`）。
 
+### 第三次追加：Windows 支持（2026-09-26，四个坑全由 CI 实证）
+
+在用户提出「是否可以 fork 一份提交 pr、本地暂时依赖 fork 的？」之后把 Windows 拿下了。
+关键发现：**根因不止一个，而它们在上游 `GmSSL/gmssl-rs@main` 里全都已修好，只是没发版**
+（crates.io 上 `gmssl-rs-sys` 只有 0.1.0、`gmssl-rs` 只有 0.1.1，都发布在 2026-05-31，
+而修复在其后的 main 上）。所以**不重写补丁，而是回移 + 钉版本**。
+
+四个坑（每次 CI 只暴露一个，逐一实测确认）：
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `C1083: 缺 dlfcn.h / netdb.h`（C 层） | GmSSL 的 `api.h`/`socket.h`/`dylib.h` 用 `#ifdef WIN32`，而 MSVC 只预定义 `_WIN32`；CMake 平台模块本会补 `/DWIN32`，却被 cmake-rs 覆盖 `CMAKE_C_FLAGS(_RELEASE)` 时顶掉 | 上游的写法是 cmake-rs 的 **`cflag("-DWIN32")`**（`define()` 塞的是 CMake 缓存变量、`GMSSL_CMAKE_DEFINES` 又受 `split_whitespace` 限制，都表达不了 `/D` 宏） |
+| 2 | 装到 `C:/Program Files/GmSSL`；`CMake build completed but no lib/` | GmSSL 的 `CMakeLists.txt` 硬编码 `CMAKE_INSTALL_PREFIX`；VS 是多配置生成器，库落在 `lib/Release/` | 上游的「构建时打补丁 + 还原」+ `find_lib_dir()` |
+| 3 | `error[E0425] cannot find function fmemopen / open_memstream` | `gmssl-rs` 0.1.1 用 POSIX 专属 API 给 GmSSL 的 C 接口造 `FILE*` | 上游的 `#[cfg(windows)]` + `tmpfile()` 实现 |
+| 4 | `LNK2019 x509_key_cleanup / zuc256_generate_keystream` → `LNK1120` | **crates.io 上这一对不自洽**：封装层 0.1.1 声明了两个 **GmSSL 3.2.0** 才有的符号（`zuc256_generate_keystream` 在 3.1.1 里只是 `zuc.h` 的宏），而 sys 0.1.0 构建的是 3.1.1；macOS/Linux 靠静态库「按需取成员」侥幸没拉到那两个 CGU | 本库 `build.rs` 在 Windows 发 `/FORCE:UNRESOLVED`（本库不暴露 X509/ZUC，符号不会被调用） |
+
+落地方式（**不改 GmSSL 版本、不改 API/ABI**）：
+
+- 两个补丁仓库（都只有一处文件与 crates.io 字节不同）：
+  - <https://github.com/jeromexiong/gmssl-rs-sys-patched> @`791d8f3`（回移坑 1、2）
+  - <https://github.com/jeromexiong/gmssl-rs-patched> @`c38c699`（回移坑 3）
+  两个仓库的第一个提交都是 crates.io 原始字节、第二个提交才是补丁（`git show` 即完整可评审
+  diff）；坑 3 的补丁是「生成 diff → `patch` 应用 → 与上游文件逐字节比对」得来的，不是手抄。
+- 本仓库用 `[patch.crates-io]` 钉住这两个 rev，`Cargo.lock` + `--locked` 锁死。
+- GmSSL 仍是 **3.1.1** 且源码随 crate 分发 ⇒ 构建无下载、无 submodule、性能数字不变。
+
+**证据（run 36244388866，`workflow_dispatch`）**：`test` + 4 平台 wheel 全 success；Windows 腿
+额外做了「装真轮子 + 跑完整 pytest」：`Successfully installed gmssl-fast-0.1.0`、
+**`63 passed in 0.76s`**（含 snowland-smx 双向对拍）⇒ 既证明 `/FORCE:UNRESOLVED` 产出的 DLL
+能加载、能算，也补上了「链接期放宽」丢掉的失败可见性。产物名：
+`gmssl_fast-0.1.0-cp38-abi3-win_amd64.whl`。
+
+过程中还踩到一个**纯 CI 脚本**的坑：Windows runner 默认 shell 是 pwsh，不展开 `dist/*.whl`，
+`pip install dist/*.whl` 会报 `Invalid wheel filename (wrong number of parts): '*'` → 该步骤
+改成 `shell: bash`。
+
+副产品（值得反馈上游，但**未代发**）：① `gmssl-rs-sys` 的 `repository` 字段指向
+`guanzhi/gmssl-rs`（**404 死链**，真上游是 `GmSSL/gmssl-rs`）；② 该仓库的 submodule 仍钉在
+3.1.1 的 `d655c06b`，而 `build.rs` 里 `GMSSL_RELEASE_TAG` 已是 `v3.2.0`（自相矛盾；且 cargo
+的 git 依赖不初始化 submodule，下游只会走 3.2.0 下载路径）；③ 坑 4 那对不自洽；
+④ 0.1.0/0.1.1 都早于 main 上的修复——建议上游发一个补丁版。
+
 ### 与计划的偏差（均已记录理由）
 
 1. **`cargo test` 需要 pyo3-free 核心**：否则测试要链接 libpython（计划未预见，实测必须改）。
@@ -853,10 +895,11 @@ Expected: 数字与本库实测一致；README 里明确标注**测试机与架�
    流水线保留幂等兜底（本机没能在真容器里跑过）。
 5. **SM2 签名性能**：库级 1395 ops/s 低于 C 层基线 2538 ops/s，根因是每次调用重建 PKCS#8
    （GmSSL 校验公钥字段 = 一次额外 EC 乘法）；已登记为后续可选优化（设计 §10）。
-6. **Windows 从矩阵移除**：CI 实测 3 次均失败（GmSSL 用 `#ifdef WIN32`，而 cmake-rs 顶掉了 CMake
+6. ~~**Windows 从矩阵移除**~~ → **已于 2026-09-26 恢复（4 平台全绿，见上一节）**。当时记录：
+   CI 实测 3 次均失败（GmSSL 用 `#ifdef WIN32`，而 cmake-rs 顶掉了 CMake
    平台默认的 `/DWIN32` → MSVC 缺 `dlfcn.h` / `netdb.h`）；`CMAKE_C_FLAGS` 与
-   `CMAKE_C_FLAGS_RELEASE` 两条路都试过，宏都没到达 cl.exe。要 Windows 得走 R3
-   （设计 §9 触发器 5、§10）。
+   `CMAKE_C_FLAGS_RELEASE` 两条路都试过，宏都没到达 cl.exe。当时判断「要 Windows 得走 R3」
+   —— **实际不用**：真修法上游 main 已有（`cflag("-DWIN32")` 等），只是没发版。
 7. **`GMSSL_CMAKE_DEFINES` 一直是空操作**（计划里 10 处命令都带着它）：GmSSL **3.1.1** 的
    `cmake_minimum_required(VERSION 3.6)` 在 CMake 4.x 下合法，本就不需要策略下限；且该变量按
    `KEY=value` 交给 cmake-rs（它自己再加 `-D`），多写的 `-D` 让 CMakeCache 里出现的是
