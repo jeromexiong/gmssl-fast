@@ -23,6 +23,9 @@ use crate::sm2_fmt;
 
 const SCALAR_BYTES: usize = 32;
 const POINT_BYTES: usize = 65;
+/// 明文上限：GmSSL 的 `SM2_CIPHERTEXT` 用固定缓冲（`uint8_t ciphertext[255]`，见 `sm2.h`）。
+/// ⚠️ 这是 **GmSSL API 的限制**，不是裸 C1C3C2 格式的限制（纯 Python 实现如 pysmx 不受限）。
+const MAX_PLAINTEXT_BYTES: usize = 255;
 
 fn invalid(msg: &'static str) -> GmsslError {
     GmsslError::InvalidInput(msg)
@@ -163,6 +166,12 @@ pub(crate) fn encrypt_raw(public_key_hex: &str, data: &[u8]) -> Result<Vec<u8>, 
 
 /// 加密（已解析的密钥）——供句柄复用，省掉每次调用的 SPKI 解析。
 pub(crate) fn encrypt_with_key(key: &Sm2Key, data: &[u8]) -> Result<Vec<u8>, GmsslError> {
+    // 在这里显式拦下超长明文：否则 GmSSL 只会报一句无从下手的 "sm2_encrypt"。
+    if data.len() > MAX_PLAINTEXT_BYTES {
+        return Err(invalid(
+            "SM2 明文上限 255 字节（GmSSL 的 SM2_CIPHERTEXT 固定缓冲，非裸格式限制）",
+        ));
+    }
     let der = gmssl_rs::sm2::sm2_encrypt(key, data)?;
     sm2_fmt::ct_der_to_raw(&der)
 }
@@ -460,5 +469,27 @@ b3996ca6e16bc109c3e43a1133a2c16485f4f67dd0d8dded6b837f4e9dca2ea21";
         let key = Sm2Key::generate().unwrap();
         println!("PRIV_DER={}", to_hex(&key.to_private_key_der().unwrap()));
         println!("PUB_DER={}", to_hex(&key.to_public_key_der().unwrap()));
+    }
+
+    #[test]
+    fn plaintext_limit_is_255_bytes_with_clear_error() {
+        // GmSSL 的 `SM2_CIPHERTEXT` 用固定 255 字节缓冲（`sm2.h`），所以明文上限是 255。
+        // ⚠️ 这是 **GmSSL API 的限制**，不是裸 C1C3C2 格式的限制（pysmx 等纯 Python
+        //    实现不受此限；fastapiadmin 的契约测试里那条 512 字节用例因此改为「已知限制」）。
+        let point = parse_point(GOLDEN_POINT).unwrap();
+        let public_key = point_key(&point).unwrap();
+        let private_key = scalar_key(&golden_scalar(), Some(&point)).unwrap();
+
+        // 边界内（255）必须可用
+        let message = vec![0x5au8; MAX_PLAINTEXT_BYTES];
+        let der = gmssl_rs::sm2::sm2_encrypt(&public_key, &message).unwrap();
+        let raw = sm2_fmt::ct_der_to_raw(&der).unwrap();
+        assert_eq!(raw.len(), 96 + message.len());
+        assert_eq!(decrypt_with_key(&private_key, &raw).unwrap(), message);
+
+        // 越界必须给出可读原因，而不是 GmSSL 的 "sm2_encrypt"
+        let err = encrypt_with_key(&public_key, &vec![0u8; MAX_PLAINTEXT_BYTES + 1]).unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("255 字节"), "实际错误：{message}");
     }
 }
