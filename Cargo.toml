@@ -9,12 +9,17 @@ publish = false
 name = "_core"
 crate-type = ["cdylib"]
 
-# gmssl-rs-sys 0.1.0 的 Windows/MSVC 修复在上游 GmSSL/gmssl-rs@main 里已有，
-# 但尚未发版（crates.io 仍是修复前的 0.1.0）。这里钉住一份回移了该修复的 0.1.0
-# 副本（GmSSL 仍为 3.1.1，仅 build.rs 不同）：
-# https://github.com/jeromexiong/gmssl-rs-sys-patched
-# 上游发布含该修复的版本后，删掉这个 [patch] 段落即可。
+# 上游 GmSSL/gmssl-rs@main 里已有两处 Windows 修复，但**都还没有发版**
+# （crates.io 上 gmssl-rs-sys 只有 0.1.0、gmssl-rs 只有 0.1.1）：
+#   ① gmssl-rs-sys 的 build.rs：MSVC 下缺 WIN32 宏（→ C1083 缺 dlfcn.h/netdb.h）、
+#      GmSSL 硬编码的 CMAKE_INSTALL_PREFIX、VS 多配置生成器的 lib/<Config>/ 目录；
+#   ② gmssl-rs 的 src/pem_helpers.rs：POSIX 专属的 fmemopen/open_memstream 在 Windows 上不存在。
+# 这里分别钉住一份「只改了这一处」的副本（GmSSL 仍为 3.1.1，源码随 crate 分发）：
+#   https://github.com/jeromexiong/gmssl-rs-sys-patched  （仅 build.rs 不同）
+#   https://github.com/jeromexiong/gmssl-rs-patched      （仅 src/pem_helpers.rs 不同）
+# 上游发布含修复的版本后，删掉这个 [patch] 段落即可。
 [patch.crates-io]
+gmssl-rs = { git = "https://github.com/jeromexiong/gmssl-rs-patched", rev = "c38c69944929b5936bc71e28a3baa965ac582e40" }
 gmssl-rs-sys = { git = "https://github.com/jeromexiong/gmssl-rs-sys-patched", rev = "791d8f3944073e53452ee6ecbfcdae544f3192b4" }
 
 [dependencies]

@@ -38,8 +38,7 @@ dependencies = [
 [[package]]
 name = "gmssl-rs"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e71033e1aec3b4532649346cdd48b453a06bb199e0ef035b4c3d6bf28cb2cb3c"
+source = "git+https://github.com/jeromexiong/gmssl-rs-patched?rev=c38c69944929b5936bc71e28a3baa965ac582e40#c38c69944929b5936bc71e28a3baa965ac582e40"
 dependencies = [
  "gmssl-rs-sys",
  "libc",
