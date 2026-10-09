@@ -20,6 +20,7 @@ crate-type = ["cdylib"]
 # 该副本只有那两个文件与 crates.io 字节不同；GmSSL 仍为 3.1.1 且源码随 crate 分发
 # ⇒ 无下载、无 submodule、API/ABI 与本机已验证版本逐字节一致。
 # 上游发布含修复的版本后，删掉这个 [patch] 段落即可。
+# 追踪：GmSSL/gmssl-rs#3（GMSSL_DIR 平台链接修复 + 删过期子模块 + 0.2.0 发版准备）。
 [patch.crates-io]
 gmssl-rs = { git = "https://github.com/jeromexiong/gmssl-rs-patched", rev = "e05fd649fd989103e2f4300fec27b76fae33422a" }
 
